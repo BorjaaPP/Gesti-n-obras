@@ -85,7 +85,7 @@ if menu == "🚧 Gestión de Obras (Diario)":
                     
                     # Subir y procesar con Gemini
                     audio_file = genai.upload_file(path=tmp_path)
-                    model = genai.GenerativeModel('gemini-1.5-pro')
+                    model = genai.GenerativeModel('gemini-2.5-flash')
                     prompt = """
                     Escucha este audio de un jefe de obra. Extrae la información en un formato JSON estricto con estas claves:
                     {"Fecha": "YYYY-MM-DD", "Proyecto": "nombre de la obra", "Tarea": "resumen de lo que hacen", "Personal": "nombres de los trabajadores", "Maquinaria": "maquinaria mencionada"}
