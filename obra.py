@@ -80,23 +80,32 @@ if menu == "🚧 Gestión de Obras (Diario)":
             archivo_audio = st.file_uploader("🎤 Sube tu audio de WhatsApp aquí", type=['mp3', 'wav', 'ogg', 'm4a', 'opus'])
             
             if archivo_audio and st.button("✨ Procesar Audio con IA"):
-                with st.spinner("🧠 Analizando audio..."):
+                with st.spinner("🧠 Analizando audio y buscando tareas similares..."):
                     try:
+                        # Extraer tareas existentes para dárselas a la IA
+                        df_diario_temp = cargar_datos("Diario")
+                        tareas_existentes = []
+                        if not df_diario_temp.empty:
+                            tareas_existentes = df_diario_temp[df_diario_temp['Proyecto'] == obra_actual]['Tarea'].dropna().unique().tolist()
+
                         with tempfile.NamedTemporaryFile(delete=False, suffix=".ogg") as tmp:
                             tmp.write(archivo_audio.getvalue())
                             tmp_path = tmp.name
                         
                         audio_file = genai.upload_file(path=tmp_path)
                         model = genai.GenerativeModel('gemini-2.5-flash')
-                        prompt = """
-                        Escucha este audio de un jefe de obra. Extrae la información en un formato JSON estricto con estas claves:
-                        {"Fecha": "YYYY-MM-DD", "Proyecto": "nombre de la obra", "Tarea": "resumen de lo que hacen", "Personal": "nombres de los trabajadores", "Maquinaria": "maquinaria mencionada"}
-                        Si dice un día o fecha, conviértela al formato YYYY-MM-DD del año actual. Si no menciona algo, déjalo en blanco "".
+                        prompt = f"""
+                        Escucha este audio de un jefe de obra. Extrae la información en formato JSON estricto:
+                        {{"Fecha": "YYYY-MM-DD", "Proyecto": "nombre de la obra", "Tarea": "nombre de la tarea", "Personal": "nombres", "Maquinaria": "maquinaria"}}
+                        
+                        REGLA VITAL PARA EL CAMPO 'Tarea': 
+                        Aquí tienes una lista de las tareas que YA EXISTEN en esta obra: {tareas_existentes}.
+                        Si lo que dice el audio se parece o significa lo mismo que alguna de estas tareas (ej: "poner ladrillos" es lo mismo que "Levante de ladrillo"), debes usar EXACTAMENTE el nombre de la lista. No crees duplicados. Si es una tarea totalmente nueva, crea un nombre muy corto y general (máximo 4 palabras, ej: 'Rampa de acceso').
                         """
                         respuesta = model.generate_content([prompt, audio_file])
                         texto_json = respuesta.text.replace('```json', '').replace('```', '').strip()
                         st.session_state.ia_datos.update(json.loads(texto_json))
-                        st.success("✅ ¡Audio procesado!")
+                        st.success("✅ ¡Audio procesado y normalizado!")
                         os.remove(tmp_path)
                         genai.delete_file(audio_file.name)
                     except Exception as e:
@@ -158,9 +167,8 @@ if menu == "🚧 Gestión de Obras (Diario)":
                 Eres un Aparejador experto y asistente del Jefe de Obra. Obra actual: '{obra_actual}'.
                 
                 REGLAS DE ACTUACIÓN:
-                1. Si el usuario te pregunta por materiales simples (ej: ladrillo), busca su precio en la Base de Precios.
-                2. Si el usuario te pide calcular un material COMPUESTO (ej: mortero, hormigón in situ), debes saber de qué se compone. Busca los componentes en la base de datos. Si no los encuentras, dile al usuario: "Para calcular esto exacto, necesito que me digas a cómo pagamos el componente que falta".
-                3. **ORDEN DE IMPUTAR:** Si el usuario te da una orden directa como "Imputa X euros de Y a la tarea Z", debes aceptarlo, confirmárselo en texto, y **OBLIGATORIAMENTE** añadir al final de tu respuesta un bloque JSON exacto como este para que el sistema lo registre:
+                1. Si el usuario te pregunta por materiales, busca su precio en la Base de Precios.
+                2. **ORDEN DE IMPUTAR:** Si el usuario te da una orden directa como "Imputa X euros de Y a la tarea Z", debes aceptarlo, confirmárselo, y **OBLIGATORIAMENTE** añadir al final de tu respuesta un bloque JSON exacto como este para que el sistema lo registre. Intenta que la "Tarea" coincida con los nombres que ves en el Diario.
                 ```json_imputar
                 {{"Tarea": "nombre de la tarea", "Concepto": "descripción del gasto", "Coste": numero_total}}
                 ```
@@ -178,7 +186,6 @@ if menu == "🚧 Gestión de Obras (Diario)":
                             respuesta_ia = modelo_chat.generate_content(contexto + "\n\nUsuario: " + prompt_usuario)
                             texto_respuesta = respuesta_ia.text
                             
-                            # Comprobar si la IA ha decidido IMPUTAR un coste
                             if "```json_imputar" in texto_respuesta:
                                 match = re.search(r'```json_imputar\n(.*?)\n```', texto_respuesta, re.DOTALL)
                                 if match:
@@ -195,7 +202,6 @@ if menu == "🚧 Gestión de Obras (Diario)":
                                     guardar_datos("Costes_Imputados", df_costes)
                                     st.toast("✅ Coste imputado guardado automáticamente en la Base de Datos")
                                 
-                                # Limpiamos el texto para que el usuario no vea el código oculto
                                 texto_respuesta = re.sub(r'```json_imputar\n.*?\n```', '', texto_respuesta, flags=re.DOTALL)
 
                             st.markdown(texto_respuesta)
@@ -230,13 +236,28 @@ elif menu == "📊 Costes y Rendimientos":
             
             st.subheader(f"Resumen de Trabajos: {obra_dash}")
             
-            # --- CÁLCULO DE COSTES DE PERSONAL ---
+            # --- CÁLCULO DE COSTES DE PERSONAL (INTELIGENTE) ---
             resumen_personal = pd.DataFrame(columns=['Tarea', 'Gasto_Personal'])
             if not df_obra.empty and not df_tarifas.empty:
-                df_obra = df_obra.merge(df_tarifas[['Recurso', 'Coste_Hora']], left_on='Personal', right_on='Recurso', how='left')
-                df_obra['Coste_Hora'] = pd.to_numeric(df_obra['Coste_Hora'], errors='coerce').fillna(0)
                 df_obra['Horas_Personal'] = pd.to_numeric(df_obra['Horas_Personal'], errors='coerce').fillna(0)
-                df_obra['Gasto_Personal_Total'] = df_obra['Horas_Personal'] * df_obra['Coste_Hora']
+                
+                # Función para leer a varios trabajadores en la misma celda
+                def calcular_coste_fila(fila):
+                    texto_personal = str(fila['Personal']).lower()
+                    horas = fila['Horas_Personal']
+                    if horas == 0 or texto_personal == "nan" or texto_personal == "": return 0.0
+                    
+                    costes_encontrados = []
+                    for _, tarifa in df_tarifas.iterrows():
+                        nombre_tarifa = str(tarifa['Recurso']).lower()
+                        if nombre_tarifa in texto_personal:
+                            costes_encontrados.append(pd.to_numeric(tarifa['Coste_Hora'], errors='coerce'))
+                            
+                    if not costes_encontrados: return 0.0
+                    media_tarifa = sum(costes_encontrados) / len(costes_encontrados)
+                    return media_tarifa * horas
+
+                df_obra['Gasto_Personal_Total'] = df_obra.apply(calcular_coste_fila, axis=1)
                 resumen_personal = df_obra.groupby('Tarea').agg(Gasto_Personal=('Gasto_Personal_Total', 'sum')).reset_index()
 
             # --- CÁLCULO DE COSTES IMPUTADOS (Materiales) ---
@@ -311,33 +332,4 @@ elif menu == "🧾 Facturas y Precios":
         c4, c5, c6 = st.columns(3)
         precio = c4.number_input("Precio Unitario (€)", min_value=0.0, format="%.2f")
         dto = c5.number_input("Descuento (%)", min_value=0.0, format="%.2f")
-        factura = c6.text_input("Nº Factura / Origen")
-        
-        if st.form_submit_button("Guardar Precio"):
-            df_hist = cargar_datos("Historico_Precios")
-            nuevo_precio = pd.DataFrame([{
-                "Codigo_Material": codigo, "Material": desc, "Precio_Unitario": precio,
-                "Descuento": dto, "Proveedor": prov, "Fecha_Registro": datetime.today().strftime("%Y-%m-%d"),
-                "Factura_Origen": factura, "Proyecto": obra_fac
-            }])
-            df_hist = pd.concat([df_hist, nuevo_precio], ignore_index=True)
-            guardar_datos("Historico_Precios", df_hist)
-            st.success(f"Precio del artículo '{desc}' guardado en la base de datos.")
-
-# ==========================================
-# 5. TARIFAS
-# ==========================================
-elif menu == "💰 Tarifas (Personal/Maq)":
-    st.title("Costes Internos (Personal y Maquinaria)")
-    with st.form("form_tarifas"):
-        c1, c2, c3 = st.columns(3)
-        recurso = c1.text_input("Nombre (ej: Fernando, Retroexcavadora)")
-        tipo = c2.selectbox("Tipo", ["Personal", "Maquinaria"])
-        coste = c3.number_input("Coste por Hora (€)", min_value=0.0, format="%.2f")
-        
-        if st.form_submit_button("Guardar Tarifa"):
-            df_tar = cargar_datos("Tarifas_Personal_Maquinaria") 
-            nueva_tarifa = pd.DataFrame([{"Recurso": recurso, "Tipo": tipo, "Coste_Hora": coste}])
-            df_tar = pd.concat([df_tar, nueva_tarifa], ignore_index=True)
-            guardar_datos("Tarifas_Personal_Maquinaria", df_tar)
-            st.success("Tarifa registrada con éxito.")
+        factura = c
