@@ -84,12 +84,10 @@ if menu == "🚧 Gestión de Obras (Diario)":
             if archivo_audio and st.button("✨ Procesar Audio con IA"):
                 with st.spinner("🧠 La IA está escuchando y analizando tu audio..."):
                     try:
-                        # Guardar audio temporalmente para que la IA lo escuche
                         with tempfile.NamedTemporaryFile(delete=False, suffix=".ogg") as tmp:
                             tmp.write(archivo_audio.getvalue())
                             tmp_path = tmp.name
                         
-                        # Subir y procesar con Gemini 2.5 flash
                         audio_file = genai.upload_file(path=tmp_path)
                         model = genai.GenerativeModel('gemini-2.5-flash')
                         prompt = """
@@ -99,15 +97,12 @@ if menu == "🚧 Gestión de Obras (Diario)":
                         """
                         respuesta = model.generate_content([prompt, audio_file])
                         
-                        # Limpiar la respuesta para sacar solo el JSON
                         texto_json = respuesta.text.replace('```json', '').replace('```', '').strip()
                         datos_extraidos = json.loads(texto_json)
                         
-                        # Guardar en la memoria para rellenar las cajas
                         st.session_state.ia_datos.update(datos_extraidos)
                         st.success("✅ ¡Audio procesado! Revisa los datos abajo.")
                         
-                        # Borrar archivo temporal
                         os.remove(tmp_path)
                         genai.delete_file(audio_file.name)
                     except Exception as e:
@@ -116,7 +111,6 @@ if menu == "🚧 Gestión de Obras (Diario)":
             st.divider()
             st.write("**Revisa y completa los datos antes de guardar:**")
             
-            # FORMULARIO PRE-RELLENADO POR LA IA
             with st.form("form_diario_ia"):
                 c1, c2 = st.columns(2)
                 fecha_input = c1.text_input("Fecha", value=st.session_state.ia_datos.get("Fecha", datetime.today().strftime("%Y-%m-%d")))
@@ -154,7 +148,6 @@ if menu == "🚧 Gestión de Obras (Diario)":
                     df_diario = pd.concat([df_diario, nuevo_parte], ignore_index=True)
                     guardar_datos("Diario", df_diario)
                     
-                    # Limpiar memoria tras guardar
                     st.session_state.ia_datos = {
                         "Fecha": datetime.today().strftime("%Y-%m-%d"), "Proyecto": "", "Tarea": "", 
                         "Personal": "", "Maquinaria": ""
@@ -165,23 +158,20 @@ if menu == "🚧 Gestión de Obras (Diario)":
         with tab_chat:
             st.write(f"Habla con la IA sobre los datos y costes de **{obra_actual}**")
             
-            # Mostrar mensajes anteriores
             for msg in st.session_state.mensajes_chat:
                 with st.chat_message(msg["role"]):
                     st.markdown(msg["content"])
             
-            # Entrada de texto del usuario
-            if prompt_usuario := st.chat_input("Ej: Calcula el coste de los m2 de ladrillo de esta semana..."):
-                # Mostrar lo que escribió el usuario
+            if prompt_usuario := st.chat_input("Ej: Calcula el coste de Fernando en la rampa..."):
                 st.session_state.mensajes_chat.append({"role": "user", "content": prompt_usuario})
                 with st.chat_message("user"):
                     st.markdown(prompt_usuario)
                 
-                # Cargar datos para dárselos a la IA de contexto
+                # --- AQUÍ ESTÁ LA MAGIA ARREGLADA ---
                 df_d = cargar_datos("Diario")
                 df_p = cargar_datos("Historico_Precios")
+                df_t = cargar_datos("Tarifas_Personal_Maquinaria") # <-- AHORA LEE LA PESTAÑA CORRECTA
                 
-                # Filtrar el diario solo para esta obra para no confundir a la IA
                 if not df_d.empty:
                     df_d_obra = df_d[df_d['Proyecto'] == obra_actual].to_csv(index=False)
                 else:
@@ -190,13 +180,17 @@ if menu == "🚧 Gestión de Obras (Diario)":
                 contexto = f"""
                 Eres el asistente inteligente de un Jefe de Obra. Tu tarea es ayudarle a calcular costes, materiales y rendimientos.
                 Aquí tienes los datos actuales de la obra '{obra_actual}':
-                Partes Diarios (CSV):
+                
+                1. Partes Diarios (CSV):
                 {df_d_obra}
                 
-                Base de Datos de Precios (CSV):
-                {df_p.to_csv(index=False) if not df_p.empty else "Sin precios todavía"}
+                2. Base de Datos de Precios de Materiales (CSV):
+                {df_p.to_csv(index=False) if not df_p.empty else "Sin precios de materiales"}
                 
-                Responde a la consulta del usuario usando estos datos. Si te pide calcular algo y no encuentras el precio exacto en la base de datos, avísale amablemente y dile qué información necesitas que te dé (ej. el precio unitario) para hacerle el cálculo. No inventes precios.
+                3. Tarifas de Mano de Obra y Maquinaria (CSV):
+                {df_t.to_csv(index=False) if not df_t.empty else "Sin tarifas registradas"}
+                
+                Responde a la consulta del usuario usando estos datos. Ahora ya tienes acceso a los precios de los materiales y a lo que cuesta la hora de los trabajadores. Haz los cálculos matemáticos multiplicando las horas del parte diario por el coste por hora de las tarifas. No inventes precios.
                 """
                 
                 with st.chat_message("assistant"):
@@ -234,17 +228,14 @@ elif menu == "📊 Costes y Rendimientos":
             if df_obra.empty:
                 st.info(f"No hay partes registrados en la obra {obra_dash}.")
             else:
-                # Asegurar formato numérico para las sumas
                 df_obra['Horas_Personal'] = pd.to_numeric(df_obra['Horas_Personal'], errors='coerce').fillna(0)
                 df_obra['Produccion'] = pd.to_numeric(df_obra['Produccion'], errors='coerce').fillna(0)
                 
-                # Calcular resumen agrupando por Tarea
                 resumen = df_obra.groupby(['Tarea', 'Unidad']).agg(
                     Total_Horas=('Horas_Personal', 'sum'),
                     Total_Unidades=('Produccion', 'sum')
                 ).reset_index()
                 
-                # Calcular Rendimiento (Producción / Horas)
                 resumen['Rendimiento (Unidades/Hora)'] = (resumen['Total_Unidades'] / resumen['Total_Horas']).round(2)
                 resumen['Rendimiento (Unidades/Hora)'] = resumen['Rendimiento (Unidades/Hora)'].fillna(0)
                 
@@ -331,6 +322,8 @@ elif menu == "💰 Tarifas (Personal/Maq)":
         coste = c3.number_input("Coste por Hora (€)", min_value=0.0, format="%.2f")
         
         if st.form_submit_button("Guardar Tarifa"):
-            df_tar = cargar_datos("Tarifas")
+            df_tar = cargar_datos("Tarifas_Personal_Maquinaria") # <-- PESTAÑA ACTUALIZADA
             nueva_tarifa = pd.DataFrame([{"Recurso": recurso, "Tipo": tipo, "Coste_Hora": coste}])
-            df_tar = pd.concat
+            df_tar = pd.concat([df_tar, nueva_tarifa], ignore_index=True)
+            guardar_datos("Tarifas_Personal_Maquinaria", df_tar) # <-- PESTAÑA ACTUALIZADA
+            st.success("Tarifa registrada con éxito.")
