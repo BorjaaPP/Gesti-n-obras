@@ -27,6 +27,19 @@ def cargar_datos(hoja):
 def guardar_datos(hoja, df):
     conn.update(worksheet=hoja, data=df)
 
+# Función para calcular los euros de la mano de obra
+def calcular_coste_personal(texto_personal, horas, df_tarifas):
+    if not texto_personal or horas <= 0 or df_tarifas.empty: return 0.0
+    texto_personal = str(texto_personal).lower()
+    costes_encontrados = []
+    for _, tarifa in df_tarifas.iterrows():
+        nombre_tarifa = str(tarifa['Recurso']).lower()
+        if nombre_tarifa and nombre_tarifa != "nan" and nombre_tarifa in texto_personal:
+            costes_encontrados.append(pd.to_numeric(tarifa['Coste_Hora'], errors='coerce'))
+    if not costes_encontrados: return 0.0
+    media_tarifa = sum(costes_encontrados) / len(costes_encontrados)
+    return media_tarifa * float(horas)
+
 # --- INICIALIZAR MEMORIA TEMPORAL ---
 if 'ia_datos' not in st.session_state:
     st.session_state.ia_datos = {
@@ -128,6 +141,7 @@ if menu == "🚧 Gestión de Obras (Diario)":
                 ud = c8.text_input("Unidad (ej: m2, ml, ud)")
                 
                 if st.form_submit_button("💾 Guardar en Base de Datos"):
+                    # 1. GUARDAR EN EL DIARIO
                     df_diario = cargar_datos("Diario")
                     nuevo_parte = pd.DataFrame([{
                         "Fecha": fecha_input, "Proyecto": obra_actual, 
@@ -138,8 +152,24 @@ if menu == "🚧 Gestión de Obras (Diario)":
                     }])
                     df_diario = pd.concat([df_diario, nuevo_parte], ignore_index=True)
                     guardar_datos("Diario", df_diario)
+                    
+                    # 2. CALCULAR Y ENVIAR A COSTES_IMPUTADOS AUTOMÁTICAMENTE
+                    df_tarifas = cargar_datos("Tarifas_Personal_Maquinaria")
+                    coste_p = calcular_coste_personal(personal, h_pers, df_tarifas)
+                    if coste_p > 0:
+                        df_costes = cargar_datos("Costes_Imputados")
+                        nuevo_coste = pd.DataFrame([{
+                            "Fecha": fecha_input,
+                            "Proyecto": obra_actual,
+                            "Tarea": tarea,
+                            "Concepto": f"Mano de obra: {personal}",
+                            "Coste_Total": coste_p
+                        }])
+                        df_costes = pd.concat([df_costes, nuevo_coste], ignore_index=True)
+                        guardar_datos("Costes_Imputados", df_costes)
+
                     st.session_state.ia_datos = {"Fecha": datetime.today().strftime("%Y-%m-%d"), "Proyecto": "", "Tarea": "", "Personal": "", "Maquinaria": ""}
-                    st.success("¡Datos guardados!")
+                    st.success("¡Datos guardados en el Diario y Costes actualizados!")
 
         # --- PESTAÑA: CHAT DEL PROYECTO ---
         with tab_chat:
@@ -164,11 +194,11 @@ if menu == "🚧 Gestión de Obras (Diario)":
                 Eres un Aparejador experto. Obra actual: '{obra_actual}'.
                 
                 REGLAS VITALES DE ACTUACIÓN:
-                1. **IMPUTAR MATERIALES O COSTES FIJOS:** Si el usuario te manda imputar un coste directo (ej: 750€ de hormigón), responde confirmándolo y añade este bloque al final:
+                1. **IMPUTAR MATERIALES:** Si el usuario te manda imputar un material, añade este bloque:
                 ```json_imputar
                 {{"Tarea": "nombre", "Concepto": "descripción material", "Coste": numero}}
                 ```
-                2. **REGISTRAR MANO DE OBRA / JORNADAS:** Si el usuario te indica que ciertas personas han trabajado X horas (o ciertos días), **NUNCA lo imputes como dinero**. Debes registrar las horas en el Diario de obra añadiendo este bloque al final de tu respuesta (puedes meter varios días en la lista):
+                2. **REGISTRAR MANO DE OBRA:** Si el usuario indica horas de personal, OBLIGATORIAMENTE debes crear el registro en el Diario. El sistema se encargará solo de calcular los euros y mandarlos a Costes. Añade este bloque a tu respuesta:
                 ```json_diario
                 [
                   {{"Fecha": "YYYY-MM-DD", "Tarea": "nombre", "Personal": "nombres", "Horas_Personal": numero}}
@@ -188,7 +218,7 @@ if menu == "🚧 Gestión de Obras (Diario)":
                             respuesta_ia = modelo_chat.generate_content(contexto + "\n\nUsuario: " + prompt_usuario)
                             texto_respuesta = respuesta_ia.text
                             
-                            # Comprobar si hay MATERIALES que imputar
+                            # MATERIALES (Directo a Costes)
                             if "```json_imputar" in texto_respuesta:
                                 match_imp = re.search(r'```json_imputar\n(.*?)\n```', texto_respuesta, re.DOTALL)
                                 if match_imp:
@@ -206,16 +236,22 @@ if menu == "🚧 Gestión de Obras (Diario)":
                                     st.toast("🛒 Coste de material guardado en Base de Datos")
                                 texto_respuesta = re.sub(r'```json_imputar\n.*?\n```', '', texto_respuesta, flags=re.DOTALL)
 
-                            # Comprobar si hay HORAS DE PERSONAL que registrar en el Diario
+                            # MANO DE OBRA (Al Diario y automáticamente a Costes)
                             if "```json_diario" in texto_respuesta:
                                 match_diario = re.search(r'```json_diario\n(.*?)\n```', texto_respuesta, re.DOTALL)
                                 if match_diario:
                                     datos_diario = json.loads(match_diario.group(1))
-                                    if isinstance(datos_diario, dict): datos_diario = [datos_diario] # Asegurar que es lista
+                                    if isinstance(datos_diario, dict): datos_diario = [datos_diario]
                                     
                                     df_diario_act = cargar_datos("Diario")
+                                    df_costes_act = cargar_datos("Costes_Imputados")
+                                    df_tarifas_act = cargar_datos("Tarifas_Personal_Maquinaria")
+                                    
                                     nuevos_partes = []
+                                    nuevos_costes = []
+                                    
                                     for d in datos_diario:
+                                        # Guardar para el Diario
                                         nuevos_partes.append({
                                             "Fecha": d.get("Fecha", datetime.today().strftime("%Y-%m-%d")),
                                             "Proyecto": obra_actual,
@@ -226,9 +262,26 @@ if menu == "🚧 Gestión de Obras (Diario)":
                                             "Horas_Personal": float(d.get("Horas_Personal", 0)),
                                             "Maquinaria": "", "Horas_Maq": 0, "Produccion": 0, "Unidad": ""
                                         })
+                                        
+                                        # Calcular para enviarlo también a Costes
+                                        coste_p = calcular_coste_personal(d.get("Personal", ""), float(d.get("Horas_Personal", 0)), df_tarifas_act)
+                                        if coste_p > 0:
+                                            nuevos_costes.append({
+                                                "Fecha": d.get("Fecha", datetime.today().strftime("%Y-%m-%d")),
+                                                "Proyecto": obra_actual,
+                                                "Tarea": d.get("Tarea", ""),
+                                                "Concepto": f"Mano de obra: {d.get('Personal', '')}",
+                                                "Coste_Total": coste_p
+                                            })
+                                            
                                     df_diario_act = pd.concat([df_diario_act, pd.DataFrame(nuevos_partes)], ignore_index=True)
                                     guardar_datos("Diario", df_diario_act)
-                                    st.toast("👷 Partes de trabajo guardados en el Diario")
+                                    
+                                    if nuevos_costes:
+                                        df_costes_act = pd.concat([df_costes_act, pd.DataFrame(nuevos_costes)], ignore_index=True)
+                                        guardar_datos("Costes_Imputados", df_costes_act)
+                                        
+                                    st.toast("👷 Partes de trabajo guardados y volcados al Libro de Costes")
                                 texto_respuesta = re.sub(r'```json_diario\n.*?\n```', '', texto_respuesta, flags=re.DOTALL)
 
                             st.markdown(texto_respuesta)
@@ -263,34 +316,20 @@ elif menu == "📊 Costes y Rendimientos":
             
             st.subheader(f"Resumen de Trabajos: {obra_dash}")
             
-            # --- CÁLCULO DE COSTES DE PERSONAL (INTELIGENTE) ---
+            # --- CÁLCULO DE COSTES DE PERSONAL (Desde el Diario para mantener métricas) ---
             resumen_personal = pd.DataFrame(columns=['Tarea', 'Gasto_Personal'])
             if not df_obra.empty and not df_tarifas.empty:
                 df_obra['Horas_Personal'] = pd.to_numeric(df_obra['Horas_Personal'], errors='coerce').fillna(0)
-                
-                def calcular_coste_fila(fila):
-                    texto_personal = str(fila['Personal']).lower()
-                    horas = fila['Horas_Personal']
-                    if horas == 0 or texto_personal == "nan" or texto_personal == "": return 0.0
-                    
-                    costes_encontrados = []
-                    for _, tarifa in df_tarifas.iterrows():
-                        nombre_tarifa = str(tarifa['Recurso']).lower()
-                        if nombre_tarifa in texto_personal:
-                            costes_encontrados.append(pd.to_numeric(tarifa['Coste_Hora'], errors='coerce'))
-                            
-                    if not costes_encontrados: return 0.0
-                    media_tarifa = sum(costes_encontrados) / len(costes_encontrados)
-                    return media_tarifa * horas
-
-                df_obra['Gasto_Personal_Total'] = df_obra.apply(calcular_coste_fila, axis=1)
+                df_obra['Gasto_Personal_Total'] = df_obra.apply(lambda row: calcular_coste_personal(row['Personal'], row['Horas_Personal'], df_tarifas), axis=1)
                 resumen_personal = df_obra.groupby('Tarea').agg(Gasto_Personal=('Gasto_Personal_Total', 'sum')).reset_index()
 
-            # --- CÁLCULO DE COSTES IMPUTADOS (Materiales) ---
+            # --- CÁLCULO DE COSTES IMPUTADOS (Solo Materiales, para no duplicar en pantalla) ---
             resumen_materiales = pd.DataFrame(columns=['Tarea', 'Gasto_Materiales'])
             if not df_imp_obra.empty:
                 df_imp_obra['Coste_Total'] = pd.to_numeric(df_imp_obra['Coste_Total'], errors='coerce').fillna(0)
-                resumen_materiales = df_imp_obra.groupby('Tarea').agg(Gasto_Materiales=('Coste_Total', 'sum')).reset_index()
+                # Omitimos la mano de obra autogenerada en la visualización para no sumarla dos veces
+                df_solo_materiales = df_imp_obra[~df_imp_obra['Concepto'].str.contains('Mano de obra', case=False, na=False)]
+                resumen_materiales = df_solo_materiales.groupby('Tarea').agg(Gasto_Materiales=('Coste_Total', 'sum')).reset_index()
 
             # --- UNIR TODO EN UNA TABLA ---
             if not resumen_personal.empty or not resumen_materiales.empty:
