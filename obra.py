@@ -82,7 +82,6 @@ if menu == "🚧 Gestión de Obras (Diario)":
             if archivo_audio and st.button("✨ Procesar Audio con IA"):
                 with st.spinner("🧠 Analizando audio y buscando tareas similares..."):
                     try:
-                        # Extraer tareas existentes para dárselas a la IA
                         df_diario_temp = cargar_datos("Diario")
                         tareas_existentes = []
                         if not df_diario_temp.empty:
@@ -98,9 +97,7 @@ if menu == "🚧 Gestión de Obras (Diario)":
                         Escucha este audio de un jefe de obra. Extrae la información en formato JSON estricto:
                         {{"Fecha": "YYYY-MM-DD", "Proyecto": "nombre de la obra", "Tarea": "nombre de la tarea", "Personal": "nombres", "Maquinaria": "maquinaria"}}
                         
-                        REGLA VITAL PARA EL CAMPO 'Tarea': 
-                        Aquí tienes una lista de las tareas que YA EXISTEN en esta obra: {tareas_existentes}.
-                        Si lo que dice el audio se parece o significa lo mismo que alguna de estas tareas (ej: "poner ladrillos" es lo mismo que "Levante de ladrillo"), debes usar EXACTAMENTE el nombre de la lista. No crees duplicados. Si es una tarea totalmente nueva, crea un nombre muy corto y general (máximo 4 palabras, ej: 'Rampa de acceso').
+                        REGLA VITAL: Tareas existentes: {tareas_existentes}. Si significa lo mismo, usa el nombre exacto de la lista. Si es nueva, crea un nombre corto.
                         """
                         respuesta = model.generate_content([prompt, audio_file])
                         texto_json = respuesta.text.replace('```json', '').replace('```', '').strip()
@@ -146,13 +143,13 @@ if menu == "🚧 Gestión de Obras (Diario)":
 
         # --- PESTAÑA: CHAT DEL PROYECTO ---
         with tab_chat:
-            st.write(f"Habla con la IA. Pídele que calcule rendimientos, desgloses o **que impute costes directamente**.")
+            st.write(f"Habla con la IA. Pídele que calcule rendimientos, impute materiales o registre jornadas de trabajo.")
             
             for msg in st.session_state.mensajes_chat:
                 with st.chat_message(msg["role"]):
                     st.markdown(msg["content"])
             
-            if prompt_usuario := st.chat_input("Ej: Imputa 750€ de hormigón a la rampa de acceso..."):
+            if prompt_usuario := st.chat_input("Ej: Fernando y Humberto trabajaron 16h el día 18 en la rampa..."):
                 st.session_state.mensajes_chat.append({"role": "user", "content": prompt_usuario})
                 with st.chat_message("user"):
                     st.markdown(prompt_usuario)
@@ -164,13 +161,18 @@ if menu == "🚧 Gestión de Obras (Diario)":
                 df_d_obra = df_d[df_d['Proyecto'] == obra_actual].to_csv(index=False) if not df_d.empty else "Sin datos"
                     
                 contexto = f"""
-                Eres un Aparejador experto y asistente del Jefe de Obra. Obra actual: '{obra_actual}'.
+                Eres un Aparejador experto. Obra actual: '{obra_actual}'.
                 
-                REGLAS DE ACTUACIÓN:
-                1. Si el usuario te pregunta por materiales, busca su precio en la Base de Precios.
-                2. **ORDEN DE IMPUTAR:** Si el usuario te da una orden directa como "Imputa X euros de Y a la tarea Z", debes aceptarlo, confirmárselo, y **OBLIGATORIAMENTE** añadir al final de tu respuesta un bloque JSON exacto como este para que el sistema lo registre. Intenta que la "Tarea" coincida con los nombres que ves en el Diario.
+                REGLAS VITALES DE ACTUACIÓN:
+                1. **IMPUTAR MATERIALES O COSTES FIJOS:** Si el usuario te manda imputar un coste directo (ej: 750€ de hormigón), responde confirmándolo y añade este bloque al final:
                 ```json_imputar
-                {{"Tarea": "nombre de la tarea", "Concepto": "descripción del gasto", "Coste": numero_total}}
+                {{"Tarea": "nombre", "Concepto": "descripción material", "Coste": numero}}
+                ```
+                2. **REGISTRAR MANO DE OBRA / JORNADAS:** Si el usuario te indica que ciertas personas han trabajado X horas (o ciertos días), **NUNCA lo imputes como dinero**. Debes registrar las horas en el Diario de obra añadiendo este bloque al final de tu respuesta (puedes meter varios días en la lista):
+                ```json_diario
+                [
+                  {{"Fecha": "YYYY-MM-DD", "Tarea": "nombre", "Personal": "nombres", "Horas_Personal": numero}}
+                ]
                 ```
                 
                 DATOS ACTUALES:
@@ -180,16 +182,17 @@ if menu == "🚧 Gestión de Obras (Diario)":
                 """
                 
                 with st.chat_message("assistant"):
-                    with st.spinner("🧠 Procesando consulta..."):
+                    with st.spinner("🧠 Procesando orden..."):
                         try:
                             modelo_chat = genai.GenerativeModel('gemini-2.5-flash')
                             respuesta_ia = modelo_chat.generate_content(contexto + "\n\nUsuario: " + prompt_usuario)
                             texto_respuesta = respuesta_ia.text
                             
+                            # Comprobar si hay MATERIALES que imputar
                             if "```json_imputar" in texto_respuesta:
-                                match = re.search(r'```json_imputar\n(.*?)\n```', texto_respuesta, re.DOTALL)
-                                if match:
-                                    datos_imputar = json.loads(match.group(1))
+                                match_imp = re.search(r'```json_imputar\n(.*?)\n```', texto_respuesta, re.DOTALL)
+                                if match_imp:
+                                    datos_imputar = json.loads(match_imp.group(1))
                                     df_costes = cargar_datos("Costes_Imputados")
                                     nuevo_coste = pd.DataFrame([{
                                         "Fecha": datetime.today().strftime("%Y-%m-%d"),
@@ -200,9 +203,33 @@ if menu == "🚧 Gestión de Obras (Diario)":
                                     }])
                                     df_costes = pd.concat([df_costes, nuevo_coste], ignore_index=True)
                                     guardar_datos("Costes_Imputados", df_costes)
-                                    st.toast("✅ Coste imputado guardado automáticamente en la Base de Datos")
-                                
+                                    st.toast("🛒 Coste de material guardado en Base de Datos")
                                 texto_respuesta = re.sub(r'```json_imputar\n.*?\n```', '', texto_respuesta, flags=re.DOTALL)
+
+                            # Comprobar si hay HORAS DE PERSONAL que registrar en el Diario
+                            if "```json_diario" in texto_respuesta:
+                                match_diario = re.search(r'```json_diario\n(.*?)\n```', texto_respuesta, re.DOTALL)
+                                if match_diario:
+                                    datos_diario = json.loads(match_diario.group(1))
+                                    if isinstance(datos_diario, dict): datos_diario = [datos_diario] # Asegurar que es lista
+                                    
+                                    df_diario_act = cargar_datos("Diario")
+                                    nuevos_partes = []
+                                    for d in datos_diario:
+                                        nuevos_partes.append({
+                                            "Fecha": d.get("Fecha", datetime.today().strftime("%Y-%m-%d")),
+                                            "Proyecto": obra_actual,
+                                            "Tipo_Entrada": "Chat IA",
+                                            "Contenido": "Generado desde conversación en Chat",
+                                            "Tarea": d.get("Tarea", ""),
+                                            "Personal": d.get("Personal", ""),
+                                            "Horas_Personal": float(d.get("Horas_Personal", 0)),
+                                            "Maquinaria": "", "Horas_Maq": 0, "Produccion": 0, "Unidad": ""
+                                        })
+                                    df_diario_act = pd.concat([df_diario_act, pd.DataFrame(nuevos_partes)], ignore_index=True)
+                                    guardar_datos("Diario", df_diario_act)
+                                    st.toast("👷 Partes de trabajo guardados en el Diario")
+                                texto_respuesta = re.sub(r'```json_diario\n.*?\n```', '', texto_respuesta, flags=re.DOTALL)
 
                             st.markdown(texto_respuesta)
                             st.session_state.mensajes_chat.append({"role": "assistant", "content": texto_respuesta})
@@ -241,7 +268,6 @@ elif menu == "📊 Costes y Rendimientos":
             if not df_obra.empty and not df_tarifas.empty:
                 df_obra['Horas_Personal'] = pd.to_numeric(df_obra['Horas_Personal'], errors='coerce').fillna(0)
                 
-                # Función para leer a varios trabajadores en la misma celda
                 def calcular_coste_fila(fila):
                     texto_personal = str(fila['Personal']).lower()
                     horas = fila['Horas_Personal']
@@ -317,7 +343,6 @@ elif menu == "👷 Subcontratas":
 # ==========================================
 elif menu == "🧾 Facturas y Precios":
     st.title("Histórico de Precios y Facturas")
-    st.info("💡 Registra aquí los precios de tus materiales para que la IA los utilice en sus cálculos de costes.")
     
     df_proyectos = cargar_datos("Proyectos")
     obras_activas = df_proyectos[df_proyectos['Estado'] == 'Activa']['Nombre'].tolist() if not df_proyectos.empty else ["Sin obras"]
@@ -332,4 +357,33 @@ elif menu == "🧾 Facturas y Precios":
         c4, c5, c6 = st.columns(3)
         precio = c4.number_input("Precio Unitario (€)", min_value=0.0, format="%.2f")
         dto = c5.number_input("Descuento (%)", min_value=0.0, format="%.2f")
-        factura = c
+        factura = c6.text_input("Nº Factura / Origen")
+        
+        if st.form_submit_button("Guardar Precio"):
+            df_hist = cargar_datos("Historico_Precios")
+            nuevo_precio = pd.DataFrame([{
+                "Codigo_Material": codigo, "Material": desc, "Precio_Unitario": precio,
+                "Descuento": dto, "Proveedor": prov, "Fecha_Registro": datetime.today().strftime("%Y-%m-%d"),
+                "Factura_Origen": factura, "Proyecto": obra_fac
+            }])
+            df_hist = pd.concat([df_hist, nuevo_precio], ignore_index=True)
+            guardar_datos("Historico_Precios", df_hist)
+            st.success(f"Precio del artículo '{desc}' guardado en la base de datos.")
+
+# ==========================================
+# 5. TARIFAS
+# ==========================================
+elif menu == "💰 Tarifas (Personal/Maq)":
+    st.title("Costes Internos (Personal y Maquinaria)")
+    with st.form("form_tarifas"):
+        c1, c2, c3 = st.columns(3)
+        recurso = c1.text_input("Nombre (ej: Fernando, Retroexcavadora)")
+        tipo = c2.selectbox("Tipo", ["Personal", "Maquinaria"])
+        coste = c3.number_input("Coste por Hora (€)", min_value=0.0, format="%.2f")
+        
+        if st.form_submit_button("Guardar Tarifa"):
+            df_tar = cargar_datos("Tarifas_Personal_Maquinaria") 
+            nueva_tarifa = pd.DataFrame([{"Recurso": recurso, "Tipo": tipo, "Coste_Hora": coste}])
+            df_tar = pd.concat([df_tar, nueva_tarifa], ignore_index=True)
+            guardar_datos("Tarifas_Personal_Maquinaria", df_tar)
+            st.success("Tarifa registrada con éxito.")
