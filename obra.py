@@ -27,24 +27,27 @@ def cargar_datos(hoja):
 def guardar_datos(hoja, df):
     conn.update(worksheet=hoja, data=df)
 
-# Función para calcular los euros de la mano de obra
+# --- CORRECCIÓN MATEMÁTICA: SUMAR TARIFAS ---
 def calcular_coste_personal(texto_personal, horas, df_tarifas):
     if not texto_personal or horas <= 0 or df_tarifas.empty: return 0.0
     texto_personal = str(texto_personal).lower()
     costes_encontrados = []
+    
     for _, tarifa in df_tarifas.iterrows():
         nombre_tarifa = str(tarifa['Recurso']).lower()
         if nombre_tarifa and nombre_tarifa != "nan" and nombre_tarifa in texto_personal:
             costes_encontrados.append(pd.to_numeric(tarifa['Coste_Hora'], errors='coerce'))
+            
     if not costes_encontrados: return 0.0
-    media_tarifa = sum(costes_encontrados) / len(costes_encontrados)
-    return media_tarifa * float(horas)
+    
+    suma_tarifas = sum(costes_encontrados)
+    return suma_tarifas * float(horas)
 
 # --- INICIALIZAR MEMORIA TEMPORAL ---
 if 'ia_datos' not in st.session_state:
     st.session_state.ia_datos = {
         "Fecha": datetime.today().strftime("%Y-%m-%d"), "Proyecto": "", "Tarea": "", 
-        "Personal": "", "Maquinaria": ""
+        "Descripción_Tarea": "", "Personal": "", "Maquinaria": ""
     }
 if 'mensajes_chat' not in st.session_state:
     st.session_state.mensajes_chat = []
@@ -93,11 +96,11 @@ if menu == "🚧 Gestión de Obras (Diario)":
             archivo_audio = st.file_uploader("🎤 Sube tu audio de WhatsApp aquí", type=['mp3', 'wav', 'ogg', 'm4a', 'opus'])
             
             if archivo_audio and st.button("✨ Procesar Audio con IA"):
-                with st.spinner("🧠 Analizando audio y buscando tareas similares..."):
+                with st.spinner("🧠 Analizando audio y estructurando tareas..."):
                     try:
                         df_diario_temp = cargar_datos("Diario")
                         tareas_existentes = []
-                        if not df_diario_temp.empty:
+                        if not df_diario_temp.empty and 'Tarea' in df_diario_temp.columns:
                             tareas_existentes = df_diario_temp[df_diario_temp['Proyecto'] == obra_actual]['Tarea'].dropna().unique().tolist()
 
                         with tempfile.NamedTemporaryFile(delete=False, suffix=".ogg") as tmp:
@@ -108,14 +111,16 @@ if menu == "🚧 Gestión de Obras (Diario)":
                         model = genai.GenerativeModel('gemini-2.5-flash')
                         prompt = f"""
                         Escucha este audio de un jefe de obra. Extrae la información en formato JSON estricto:
-                        {{"Fecha": "YYYY-MM-DD", "Proyecto": "nombre de la obra", "Tarea": "nombre de la tarea", "Personal": "nombres", "Maquinaria": "maquinaria"}}
+                        {{"Fecha": "YYYY-MM-DD", "Proyecto": "nombre de la obra", "Tarea": "tarea general", "Descripción_Tarea": "detalle específico", "Personal": "nombres", "Maquinaria": "maquinaria"}}
                         
-                        REGLA VITAL: Tareas existentes: {tareas_existentes}. Si significa lo mismo, usa el nombre exacto de la lista. Si es nueva, crea un nombre corto.
+                        REGLA VITAL: Tareas generales existentes en esta obra: {tareas_existentes}. 
+                        - 'Tarea' debe ser un agrupador general (usa los de la lista si encaja, ej: 'Rampa de acceso'). 
+                        - 'Descripción_Tarea' es el detalle exacto de lo que han hecho hoy (ej: 'Colocación de piedra', 'Echar hormigón').
                         """
                         respuesta = model.generate_content([prompt, audio_file])
                         texto_json = respuesta.text.replace('```json', '').replace('```', '').strip()
                         st.session_state.ia_datos.update(json.loads(texto_json))
-                        st.success("✅ ¡Audio procesado y normalizado!")
+                        st.success("✅ ¡Audio procesado y separado por nivel de detalle!")
                         os.remove(tmp_path)
                         genai.delete_file(audio_file.name)
                     except Exception as e:
@@ -126,7 +131,10 @@ if menu == "🚧 Gestión de Obras (Diario)":
                 c1, c2 = st.columns(2)
                 fecha_input = c1.text_input("Fecha", value=st.session_state.ia_datos.get("Fecha", datetime.today().strftime("%Y-%m-%d")))
                 proyecto_ia = c2.text_input("Proyecto", value=st.session_state.ia_datos.get("Proyecto", obra_actual))
-                tarea = st.text_input("Tarea", value=st.session_state.ia_datos.get("Tarea", ""))
+                
+                c_t1, c_t2 = st.columns(2)
+                tarea = c_t1.text_input("Tarea General (Agrupador)", value=st.session_state.ia_datos.get("Tarea", ""))
+                desc_tarea = c_t2.text_input("Descripción Específica", value=st.session_state.ia_datos.get("Descripción_Tarea", ""))
                 
                 c3, c4 = st.columns(2)
                 personal = c3.text_input("Personal", value=st.session_state.ia_datos.get("Personal", ""))
@@ -147,7 +155,8 @@ if menu == "🚧 Gestión de Obras (Diario)":
                         "Fecha": fecha_input, "Proyecto": obra_actual, 
                         "Tipo_Entrada": "Audio" if archivo_audio else "Manual",
                         "Contenido": archivo_audio.name if archivo_audio else "Texto manual", 
-                        "Tarea": tarea, "Personal": personal, "Horas_Personal": h_pers, 
+                        "Tarea": tarea, "Descripción_Tarea": desc_tarea,
+                        "Personal": personal, "Horas_Personal": h_pers, 
                         "Maquinaria": maq, "Horas_Maq": h_maq, "Produccion": prod, "Unidad": ud
                     }])
                     df_diario = pd.concat([df_diario, nuevo_parte], ignore_index=True)
@@ -162,13 +171,16 @@ if menu == "🚧 Gestión de Obras (Diario)":
                             "Fecha": fecha_input,
                             "Proyecto": obra_actual,
                             "Tarea": tarea,
-                            "Concepto": f"Mano de obra: {personal}",
+                            "Concepto": f"Mano de obra ({desc_tarea}): {personal}",
                             "Coste_Total": coste_p
                         }])
                         df_costes = pd.concat([df_costes, nuevo_coste], ignore_index=True)
                         guardar_datos("Costes_Imputados", df_costes)
 
-                    st.session_state.ia_datos = {"Fecha": datetime.today().strftime("%Y-%m-%d"), "Proyecto": "", "Tarea": "", "Personal": "", "Maquinaria": ""}
+                    st.session_state.ia_datos = {
+                        "Fecha": datetime.today().strftime("%Y-%m-%d"), "Proyecto": "", "Tarea": "", 
+                        "Descripción_Tarea": "", "Personal": "", "Maquinaria": ""
+                    }
                     st.success("¡Datos guardados en el Diario y Costes actualizados!")
 
         # --- PESTAÑA: CHAT DEL PROYECTO ---
@@ -179,7 +191,7 @@ if menu == "🚧 Gestión de Obras (Diario)":
                 with st.chat_message(msg["role"]):
                     st.markdown(msg["content"])
             
-            if prompt_usuario := st.chat_input("Ej: Fernando y Humberto trabajaron 16h el día 18 en la rampa..."):
+            if prompt_usuario := st.chat_input("Ej: Fernando y Humberto trabajaron 8h echando hormigón en la rampa..."):
                 st.session_state.mensajes_chat.append({"role": "user", "content": prompt_usuario})
                 with st.chat_message("user"):
                     st.markdown(prompt_usuario)
@@ -196,12 +208,12 @@ if menu == "🚧 Gestión de Obras (Diario)":
                 REGLAS VITALES DE ACTUACIÓN:
                 1. **IMPUTAR MATERIALES:** Si el usuario te manda imputar un material, añade este bloque:
                 ```json_imputar
-                {{"Tarea": "nombre", "Concepto": "descripción material", "Coste": numero}}
+                {{"Tarea": "nombre general", "Concepto": "descripción material", "Coste": numero}}
                 ```
-                2. **REGISTRAR MANO DE OBRA:** Si el usuario indica horas de personal, OBLIGATORIAMENTE debes crear el registro en el Diario. El sistema se encargará solo de calcular los euros y mandarlos a Costes. Añade este bloque a tu respuesta:
+                2. **REGISTRAR MANO DE OBRA:** Si el usuario indica horas de personal, OBLIGATORIAMENTE debes crear el registro en el Diario. El sistema se encargará solo de calcular los euros. Separa la Tarea General (ej: Rampa de acceso) de la Descripción Específica (ej: Echar hormigón). Añade este bloque a tu respuesta:
                 ```json_diario
                 [
-                  {{"Fecha": "YYYY-MM-DD", "Tarea": "nombre", "Personal": "nombres", "Horas_Personal": numero}}
+                  {{"Fecha": "YYYY-MM-DD", "Tarea": "nombre general", "Descripción_Tarea": "detalle", "Personal": "nombres", "Horas_Personal": numero}}
                 ]
                 ```
                 
@@ -256,8 +268,9 @@ if menu == "🚧 Gestión de Obras (Diario)":
                                             "Fecha": d.get("Fecha", datetime.today().strftime("%Y-%m-%d")),
                                             "Proyecto": obra_actual,
                                             "Tipo_Entrada": "Chat IA",
-                                            "Contenido": "Generado desde conversación en Chat",
+                                            "Contenido": "Generado desde conversación",
                                             "Tarea": d.get("Tarea", ""),
+                                            "Descripción_Tarea": d.get("Descripción_Tarea", ""),
                                             "Personal": d.get("Personal", ""),
                                             "Horas_Personal": float(d.get("Horas_Personal", 0)),
                                             "Maquinaria": "", "Horas_Maq": 0, "Produccion": 0, "Unidad": ""
@@ -270,7 +283,7 @@ if menu == "🚧 Gestión de Obras (Diario)":
                                                 "Fecha": d.get("Fecha", datetime.today().strftime("%Y-%m-%d")),
                                                 "Proyecto": obra_actual,
                                                 "Tarea": d.get("Tarea", ""),
-                                                "Concepto": f"Mano de obra: {d.get('Personal', '')}",
+                                                "Concepto": f"Mano de obra ({d.get('Descripción_Tarea', '')}): {d.get('Personal', '')}",
                                                 "Coste_Total": coste_p
                                             })
                                             
@@ -316,18 +329,17 @@ elif menu == "📊 Costes y Rendimientos":
             
             st.subheader(f"Resumen de Trabajos: {obra_dash}")
             
-            # --- CÁLCULO DE COSTES DE PERSONAL (Desde el Diario para mantener métricas) ---
+            # --- CÁLCULO DE COSTES DE PERSONAL (Agrupando por 'Tarea' general) ---
             resumen_personal = pd.DataFrame(columns=['Tarea', 'Gasto_Personal'])
             if not df_obra.empty and not df_tarifas.empty:
                 df_obra['Horas_Personal'] = pd.to_numeric(df_obra['Horas_Personal'], errors='coerce').fillna(0)
                 df_obra['Gasto_Personal_Total'] = df_obra.apply(lambda row: calcular_coste_personal(row['Personal'], row['Horas_Personal'], df_tarifas), axis=1)
                 resumen_personal = df_obra.groupby('Tarea').agg(Gasto_Personal=('Gasto_Personal_Total', 'sum')).reset_index()
 
-            # --- CÁLCULO DE COSTES IMPUTADOS (Solo Materiales, para no duplicar en pantalla) ---
+            # --- CÁLCULO DE COSTES IMPUTADOS (Agrupando por 'Tarea' general) ---
             resumen_materiales = pd.DataFrame(columns=['Tarea', 'Gasto_Materiales'])
             if not df_imp_obra.empty:
                 df_imp_obra['Coste_Total'] = pd.to_numeric(df_imp_obra['Coste_Total'], errors='coerce').fillna(0)
-                # Omitimos la mano de obra autogenerada en la visualización para no sumarla dos veces
                 df_solo_materiales = df_imp_obra[~df_imp_obra['Concepto'].str.contains('Mano de obra', case=False, na=False)]
                 resumen_materiales = df_solo_materiales.groupby('Tarea').agg(Gasto_Materiales=('Coste_Total', 'sum')).reset_index()
 
