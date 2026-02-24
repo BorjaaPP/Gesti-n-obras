@@ -55,7 +55,7 @@ if 'mensajes_chat' not in st.session_state:
 # 0. LECTURA DEL MAESTRO Y SELECTOR GLOBAL
 # ==========================================
 if URL_MAESTRO == "PEGAR_AQUI_LA_URL_DEL_MAESTRO":
-    st.error("🚨 DETENTE: Debes pegar la URL de tu archivo Maestro en la línea 17 del código.")
+    st.error("🚨 DETENTE: Debes pegar la URL de tu archivo Maestro en la línea 16 del código.")
     st.stop()
 
 st.sidebar.title("🏗️ ERP Construcción")
@@ -305,4 +305,270 @@ elif menu == "📊 Costes y Rendimientos":
             df_obra['Gasto_Personal_Total'] = df_obra.apply(lambda row: calcular_coste_personal(row['Personal'], row['Horas_Personal'], df_tarifas), axis=1)
             resumen_personal = df_obra.groupby('Tarea').agg(Gasto_Personal=('Gasto_Personal_Total', 'sum')).reset_index()
 
-        resumen_materiales = pd.DataFrame(
+        resumen_materiales = pd.DataFrame(columns=['Tarea', 'Gasto_Materiales'])
+        if not df_imp_obra.empty:
+            df_imp_obra['Coste_Total'] = pd.to_numeric(df_imp_obra['Coste_Total'], errors='coerce').fillna(0)
+            df_solo_materiales = df_imp_obra[~df_imp_obra['Concepto'].str.contains('Mano de obra', case=False, na=False)]
+            resumen_materiales = df_solo_materiales.groupby('Tarea').agg(Gasto_Materiales=('Coste_Total', 'sum')).reset_index()
+
+        if not resumen_personal.empty or not resumen_materiales.empty:
+            resumen_final = pd.merge(resumen_personal, resumen_materiales, on='Tarea', how='outer').fillna(0)
+            resumen_final['COSTE_TOTAL_PARTIDA'] = resumen_final['Gasto_Personal'] + resumen_final['Gasto_Materiales']
+            st.dataframe(resumen_final.style.format({"Gasto_Personal": "{:.2f} €", "Gasto_Materiales": "{:.2f} €", "COSTE_TOTAL_PARTIDA": "{:.2f} €"}), use_container_width=True)
+
+# ==========================================
+# 3. INFORME EJECUTIVO (FINANZAS)
+# ==========================================
+elif menu == "📈 Informe Ejecutivo (Finanzas)":
+    st.title(f"📈 Informe Ejecutivo: {obra_actual}")
+    
+    with st.expander("📖 Ver Diccionario de Grupos de Control", expanded=False):
+        df_codigos = cargar_datos("Codigos_Control", url_obra)
+        if not df_codigos.empty:
+            st.dataframe(df_codigos, hide_index=True)
+        else:
+            st.warning("No has creado la pestaña 'Codigos_Control' en tu Google Sheets.")
+
+    df_pto = cargar_datos("Presupuesto_Base", url_obra)
+    df_cert = cargar_datos("Certificaciones_Ingresos", url_obra)
+    
+    if df_pto.empty:
+        st.info("Aún no has cargado el Presupuesto Base de esta obra.")
+    else:
+        df_pto_obra = df_pto.copy()
+        df_cert_obra = df_cert.copy() if not df_cert.empty else pd.DataFrame()
+        
+        df_pto_obra['Importe_Total_Adjudicado'] = pd.to_numeric(df_pto_obra['Importe_Total_Adjudicado'], errors='coerce').fillna(0)
+        
+        if not df_codigos.empty and 'Cod_Control' in df_pto_obra.columns:
+            df_pto_obra['Cod_Control'] = df_pto_obra['Cod_Control'].astype(str)
+            df_codigos['Cod_Control'] = df_codigos['Cod_Control'].astype(str)
+            df_pto_obra = df_pto_obra.merge(df_codigos, on='Cod_Control', how='left')
+            df_pto_obra['Grupo_Control'] = df_pto_obra['Grupo_Control'].fillna("Sin Asignar")
+        else:
+            df_pto_obra['Grupo_Control'] = "Sin Grupo"
+
+        resumen_pto = df_pto_obra.groupby(['Cod_Control', 'Grupo_Control'])['Importe_Total_Adjudicado'].sum().reset_index()
+
+        resumen_cert = pd.DataFrame(columns=['Cod_Control', 'Total_Certificado'])
+        if not df_cert_obra.empty and 'Importe_Certificado_Mes_1' in df_cert_obra.columns:
+            df_cert_obra['Importe_Certificado_Mes_1'] = pd.to_numeric(df_cert_obra['Importe_Certificado_Mes_1'], errors='coerce').fillna(0)
+            df_cert_obra['Cod_Control'] = df_cert_obra['Cod_Control'].astype(str)
+            resumen_cert = df_cert_obra.groupby('Cod_Control').agg(Total_Certificado=('Importe_Certificado_Mes_1', 'sum')).reset_index()
+
+        if not resumen_pto.empty:
+            informe_final = pd.merge(resumen_pto, resumen_cert, on='Cod_Control', how='left').fillna(0)
+            informe_final['% Avance'] = (informe_final['Total_Certificado'] / informe_final['Importe_Total_Adjudicado']) * 100
+            informe_final['% Avance'] = informe_final['% Avance'].fillna(0)
+            
+            st.subheader(f"Estado de Licitación vs Facturación")
+            st.dataframe(
+                informe_final.style.format({
+                    "Importe_Total_Adjudicado": "{:,.2f} €",
+                    "Total_Certificado": "{:,.2f} €",
+                    "% Avance": "{:.1f} %"
+                }).bar(subset=['% Avance'], color='#5fba7d', vmax=100),
+                use_container_width=True, hide_index=True
+            )
+            
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Presupuesto Adjudicado", f"{informe_final['Importe_Total_Adjudicado'].sum():,.2f} €")
+            c2.metric("Total Certificado a Origen", f"{informe_final['Total_Certificado'].sum():,.2f} €")
+            avance_total = (informe_final['Total_Certificado'].sum() / informe_final['Importe_Total_Adjudicado'].sum()) * 100 if informe_final['Importe_Total_Adjudicado'].sum() > 0 else 0
+            c3.metric("% Avance Global de Obra", f"{avance_total:.2f} %")
+
+# ==========================================
+# 4. MÓDULO NUEVO: IMPORTADOR MÁGICO DE PRESTO
+# ==========================================
+elif menu == "📥 Importar Presupuesto (Presto)":
+    st.title(f"📥 Importador Mágico de Presto: {obra_actual}")
+    st.write("Sube el Excel exportado de Presto para volcarlo estructurado a tu Base de Datos.")
+    
+    archivo_excel = st.file_uploader("📂 Sube tu archivo Excel (.xlsx)", type=['xlsx', 'xls'])
+    
+    if archivo_excel:
+        xls = pd.ExcelFile(archivo_excel)
+        hojas_excel = xls.sheet_names
+        
+        st.divider()
+        st.subheader("⚙️ Paso 1: Configuración del Asistente")
+        
+        with st.form("form_config_importacion"):
+            c1, c2 = st.columns(2)
+            # Sugerencias automáticas por si las pestañas existen
+            hojas_sugeridas = [h for h in hojas_excel if h.lower() in ["viviendas", "elementos comunes", "trasteros"]]
+            hojas_pto = c1.multiselect("1. ¿Qué pestañas contienen el Presupuesto?", hojas_excel, default=hojas_sugeridas)
+            
+            idx_cod = hojas_excel.index("estudio partidas") if "estudio partidas" in hojas_excel else 0
+            hoja_cod = c2.selectbox("2. ¿Qué pestaña contiene los Códigos de Control?", ["Ninguna"] + hojas_excel, index=idx_cod + 1 if "estudio partidas" in hojas_excel else 0)
+            
+            c3, c4 = st.columns(2)
+            gg_bi = c3.number_input("3. % Gastos Generales y Beneficio Ind. (GG_BI)", value=15.00, step=1.0)
+            baja = c4.number_input("4. % Baja de Adjudicación", value=1.20, step=0.1)
+            
+            # Leemos las columnas de la primera hoja para facilitar tu mapeo
+            cols_ejemplo = pd.read_excel(xls, sheet_name=hojas_pto[0], nrows=0).columns.tolist() if hojas_pto else []
+            
+            st.write("**5. Mapeo de Columnas (Revisa dónde está cada cosa en el Excel)**")
+            col1, col2, col3 = st.columns(3)
+            map_codigo = col1.selectbox("Columna 'Código' (Ej: 01.01)", cols_ejemplo, index=0 if len(cols_ejemplo)>0 else 0)
+            map_unidad = col2.selectbox("Columna 'Unidad' (Ej: m3)", cols_ejemplo, index=2 if len(cols_ejemplo)>2 else 0)
+            map_texto = col3.selectbox("Columna 'Resumen / Texto'", cols_ejemplo, index=3 if len(cols_ejemplo)>3 else 0)
+            
+            col4, col5, col6 = st.columns(3)
+            map_cant = col4.selectbox("Columna 'Cantidad' (CanPres)", cols_ejemplo, index=4 if len(cols_ejemplo)>4 else 0)
+            map_precio = col5.selectbox("Columna 'Precio Base' (PrPres)", cols_ejemplo, index=7 if len(cols_ejemplo)>7 else 0)
+            map_coste = col6.selectbox("Columna 'Coste Interno' (COSTE) - [Opcional]", ["No disponible"] + cols_ejemplo)
+            
+            btn_procesar = st.form_submit_button("🚀 Procesar Datos y Ver Tabla")
+
+        if btn_procesar and hojas_pto:
+            with st.spinner("Procesando 'Forward Fill' y calculando los presupuestos matemáticos..."):
+                try:
+                    df_resultado = pd.DataFrame()
+                    
+                    # 1. Extraer Diccionario de Códigos "estudio partidas" si se ha seleccionado
+                    diccionario_codigos = {}
+                    if hoja_cod != "Ninguna":
+                        df_cod_ext = pd.read_excel(xls, sheet_name=hoja_cod, usecols="A:B", names=['Codigo', 'Grupo_Control'])
+                        diccionario_codigos = dict(zip(df_cod_ext['Codigo'].astype(str), df_cod_ext['Grupo_Control'].astype(str)))
+
+                    # 2. Procesar las pestañas de presupuesto seleccionadas
+                    filas_procesadas = []
+                    for hoja in hojas_pto:
+                        df_h = pd.read_excel(xls, sheet_name=hoja)
+                        capitulo_actual = "Sin Capítulo"
+                        
+                        for index, row in df_h.iterrows():
+                            codigo_val = str(row[map_codigo]) if pd.notna(row[map_codigo]) else ""
+                            texto_val = str(row[map_texto]) if pd.notna(row[map_texto]) else ""
+                            precio_val = pd.to_numeric(row[map_precio], errors='coerce')
+                            
+                            # LOGICA DE CAPÍTULO: Si hay texto de resumen pero NO hay precio
+                            if texto_val and pd.isna(precio_val):
+                                capitulo_actual = texto_val
+                            
+                            # LOGICA DE PARTIDA: Si hay código y precio, es una partida real que procesar
+                            elif codigo_val and pd.notna(precio_val):
+                                cantidad = pd.to_numeric(row[map_cant], errors='coerce')
+                                if pd.isna(cantidad): cantidad = 0.0
+                                
+                                coste = 0.0
+                                if map_coste != "No disponible":
+                                    coste_val = pd.to_numeric(row[map_coste], errors='coerce')
+                                    if pd.notna(coste_val): coste = coste_val
+                                
+                                # Aplicando tu fórmula matemática
+                                pr_pres = float(precio_val)
+                                precio_licitacion = pr_pres * (1 + (gg_bi / 100.0))
+                                precio_adjudicado = precio_licitacion * (1 - (baja / 100.0))
+                                importe_total = cantidad * precio_adjudicado
+                                
+                                # Partir la primera frase como nombre y guardar el resto en Descripción
+                                lineas_texto = texto_val.split('\n')
+                                partida_nombre = lineas_texto[0][:100] if lineas_texto else texto_val
+                                
+                                # Buscar el código de control
+                                cod_control_asignado = diccionario_codigos.get(codigo_val, "")
+
+                                filas_procesadas.append({
+                                    "Cod_Control": cod_control_asignado,
+                                    "Capítulo": capitulo_actual,
+                                    "Partida_Codigo": codigo_val,
+                                    "Partida_Nombre": partida_nombre,
+                                    "Partida_Descripcion": texto_val,
+                                    "Unidad": str(row[map_unidad]) if pd.notna(row[map_unidad]) else "",
+                                    "Cantidad_Proyecto": cantidad,
+                                    "PrPres": pr_pres,
+                                    "Precio_Licitacion": precio_licitacion,
+                                    "Precio_Adjudicado": precio_adjudicado,
+                                    "Coste": coste,
+                                    "Importe_Total_Adjudicado": importe_total
+                                })
+                                
+                    df_resultado = pd.DataFrame(filas_procesadas)
+                    st.session_state.df_importacion = df_resultado
+                    st.success("✅ ¡Datos procesados correctamente!")
+                except Exception as e:
+                    st.error(f"Error procesando el Excel: {e}")
+
+        # 3. Mostrar la Vista Previa y guardar
+        if 'df_importacion' in st.session_state and not st.session_state.df_importacion.empty:
+            st.subheader("👀 Vista Previa (Revisa que todo cuadre antes de guardar)")
+            st.dataframe(st.session_state.df_importacion.head(50), use_container_width=True)
+            
+            st.warning("⚠️ Al pulsar guardar, los datos sustituirán a los actuales en la pestaña 'Presupuesto_Base'.")
+            if st.button("💾 CONFIRMAR Y SUBIR A BASE DE DATOS", type="primary"):
+                guardar_datos("Presupuesto_Base", st.session_state.df_importacion, url_obra)
+                st.success("🎉 ¡El presupuesto de Presto ha sido importado y estructurado a Google Sheets!")
+                del st.session_state['df_importacion'] # Limpiamos memoria
+
+# ==========================================
+# 5. SUBCONTRATAS
+# ==========================================
+elif menu == "👷 Subcontratas":
+    st.title(f"Control de Subcontratas: {obra_actual}")
+    with st.form("form_subcontratas"):
+        c1, c2 = st.columns(2)
+        gremio = c1.text_input("Gremio (ej: Fontanería)")
+        empresa = c2.text_input("Empresa Subcontratada")
+        c3, c4, c5 = st.columns(3)
+        f_inicio = c3.date_input("Fecha Inicio")
+        f_fin = c4.date_input("Fecha Fin Prevista")
+        estado = c5.selectbox("Estado", ["En curso", "Finalizado", "Paralizado"])
+        notas = st.text_area("Notas / Avance")
+        
+        if st.form_submit_button("Registrar Subcontrata"):
+            df_sub = cargar_datos("Subcontratas", url_obra)
+            nueva_sub = pd.DataFrame([{
+                "Proyecto": obra_actual, "Gremio": gremio, "Empresa": empresa,
+                "Fecha_Inicio": f_inicio.strftime("%Y-%m-%d"), "Fecha_Fin_Prevista": f_fin.strftime("%Y-%m-%d"),
+                "Fecha_Fin_Real": "", "Estado": estado, "Avance_Notas": notas
+            }])
+            df_sub = pd.concat([df_sub, nueva_sub], ignore_index=True)
+            guardar_datos("Subcontratas", df_sub, url_obra)
+            st.success("Subcontrata registrada correctamente.")
+
+# ==========================================
+# 6. FACTURAS Y PRECIOS
+# ==========================================
+elif menu == "🧾 Facturas y Precios":
+    st.title(f"Histórico de Precios: {obra_actual}")
+    with st.form("form_precios"):
+        c1, c2, c3 = st.columns(3)
+        codigo = c1.text_input("Código Material (SKU)")
+        desc = c2.text_input("Descripción Material")
+        prov = c3.text_input("Proveedor")
+        c4, c5, c6 = st.columns(3)
+        precio = c4.number_input("Precio Unitario (€)", min_value=0.0, format="%.2f")
+        dto = c5.number_input("Descuento (%)", min_value=0.0, format="%.2f")
+        factura = c6.text_input("Nº Factura / Origen")
+        
+        if st.form_submit_button("Guardar Precio"):
+            df_hist = cargar_datos("Historico_Precios", url_obra)
+            nuevo_precio = pd.DataFrame([{
+                "Codigo_Material": codigo, "Material": desc, "Precio_Unitario": precio,
+                "Descuento": dto, "Proveedor": prov, "Fecha_Registro": datetime.today().strftime("%Y-%m-%d"),
+                "Factura_Origen": factura, "Proyecto": obra_actual
+            }])
+            df_hist = pd.concat([df_hist, nuevo_precio], ignore_index=True)
+            guardar_datos("Historico_Precios", df_hist, url_obra)
+            st.success("Precio guardado en la base de datos.")
+
+# ==========================================
+# 7. TARIFAS
+# ==========================================
+elif menu == "💰 Tarifas (Personal/Maq)":
+    st.title(f"Costes Internos: {obra_actual}")
+    with st.form("form_tarifas"):
+        c1, c2, c3 = st.columns(3)
+        recurso = c1.text_input("Nombre (ej: Fernando, Retroexcavadora)")
+        tipo = c2.selectbox("Tipo", ["Personal", "Maquinaria"])
+        coste = c3.number_input("Coste por Hora (€)", min_value=0.0, format="%.2f")
+        
+        if st.form_submit_button("Guardar Tarifa"):
+            df_tar = cargar_datos("Tarifas_Personal_Maquinaria", url_obra) 
+            nueva_tarifa = pd.DataFrame([{"Recurso": recurso, "Tipo": tipo, "Coste_Hora": coste}])
+            df_tar = pd.concat([df_tar, nueva_tarifa], ignore_index=True)
+            guardar_datos("Tarifas_Personal_Maquinaria", df_tar, url_obra)
+            st.success("Tarifa registrada con éxito.")
