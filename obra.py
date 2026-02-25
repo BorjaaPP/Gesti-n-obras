@@ -395,7 +395,7 @@ elif menu == "📥 Importar Presupuesto (Presto)":
         
         with st.form("form_config_importacion"):
             c1, c2 = st.columns(2)
-            # Sugerencias automáticas por si las pestañas existen
+            # Sugerencias automáticas
             hojas_sugeridas = [h for h in hojas_excel if h.lower() in ["viviendas", "elementos comunes", "trasteros"]]
             hojas_pto = c1.multiselect("1. ¿Qué pestañas contienen el Presupuesto?", hojas_excel, default=hojas_sugeridas)
             
@@ -406,19 +406,20 @@ elif menu == "📥 Importar Presupuesto (Presto)":
             gg_bi = c3.number_input("3. % Gastos Generales y Beneficio Ind. (GG_BI)", value=15.00, step=1.0)
             baja = c4.number_input("4. % Baja de Adjudicación", value=1.20, step=0.1)
             
-            # Leemos las columnas de la primera hoja para facilitar tu mapeo
-            cols_ejemplo = pd.read_excel(xls, sheet_name=hojas_pto[0], nrows=0).columns.tolist() if hojas_pto else []
+            # Generamos la lista de letras de la A a la Z
+            letras_excel = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z"]
             
-            st.write("**5. Mapeo de Columnas (Revisa dónde está cada cosa en el Excel)**")
+            st.write("**5. Mapeo de Columnas (Elige la Letra de la columna en Excel)**")
             col1, col2, col3 = st.columns(3)
-            map_codigo = col1.selectbox("Columna 'Código' (Ej: 01.01)", cols_ejemplo, index=0 if len(cols_ejemplo)>0 else 0)
-            map_unidad = col2.selectbox("Columna 'Unidad' (Ej: m3)", cols_ejemplo, index=2 if len(cols_ejemplo)>2 else 0)
-            map_texto = col3.selectbox("Columna 'Resumen / Texto'", cols_ejemplo, index=3 if len(cols_ejemplo)>3 else 0)
+            # Hemos puesto los índices por defecto que me dijiste (A, C, D...)
+            map_codigo = col1.selectbox("Columna 'Código' (Ej: A)", letras_excel, index=0) # A
+            map_unidad = col2.selectbox("Columna 'Unidad' (Ej: C)", letras_excel, index=2) # C
+            map_texto = col3.selectbox("Columna 'Resumen / Texto' (Ej: D)", letras_excel, index=3) # D
             
             col4, col5, col6 = st.columns(3)
-            map_cant = col4.selectbox("Columna 'Cantidad' (CanPres)", cols_ejemplo, index=4 if len(cols_ejemplo)>4 else 0)
-            map_precio = col5.selectbox("Columna 'Precio Base' (PrPres)", cols_ejemplo, index=7 if len(cols_ejemplo)>7 else 0)
-            map_coste = col6.selectbox("Columna 'Coste Interno' (COSTE) - [Opcional]", ["No disponible"] + cols_ejemplo)
+            map_cant = col4.selectbox("Columna 'Cantidad' (Ej: E)", letras_excel, index=4) # E
+            map_precio = col5.selectbox("Columna 'Precio Base' (Ej: H)", letras_excel, index=7) # H
+            map_coste = col6.selectbox("Columna 'Coste Interno' [Opcional]", ["No disponible"] + letras_excel, index=12) # L es índice 11, pero sumamos 1 por el "No disponible"
             
             btn_procesar = st.form_submit_button("🚀 Procesar Datos y Ver Tabla")
 
@@ -427,48 +428,69 @@ elif menu == "📥 Importar Presupuesto (Presto)":
                 try:
                     df_resultado = pd.DataFrame()
                     
-                    # 1. Extraer Diccionario de Códigos "estudio partidas" si se ha seleccionado
+                    # Función interna para pasar de "A" -> 0, "B" -> 1 (Para que Pandas lo entienda)
+                    def letra_idx(letra):
+                        return ord(letra) - 65
+
+                    # 1. Extraer Diccionario de Códigos "estudio partidas"
                     diccionario_codigos = {}
                     if hoja_cod != "Ninguna":
-                        df_cod_ext = pd.read_excel(xls, sheet_name=hoja_cod, usecols="A:B", names=['Codigo', 'Grupo_Control'])
+                        df_cod_ext = pd.read_excel(xls, sheet_name=hoja_cod, usecols="A:B", header=None, names=['Codigo', 'Grupo_Control'])
+                        df_cod_ext = df_cod_ext.dropna(subset=['Codigo', 'Grupo_Control'])
                         diccionario_codigos = dict(zip(df_cod_ext['Codigo'].astype(str), df_cod_ext['Grupo_Control'].astype(str)))
 
                     # 2. Procesar las pestañas de presupuesto seleccionadas
                     filas_procesadas = []
                     for hoja in hojas_pto:
-                        df_h = pd.read_excel(xls, sheet_name=hoja)
+                        # header=None fuerza a Pandas a no comerse la fila 1 como título
+                        df_h = pd.read_excel(xls, sheet_name=hoja, header=None)
                         capitulo_actual = "Sin Capítulo"
                         
+                        # Convertimos las letras elegidas a números
+                        idx_c = letra_idx(map_codigo)
+                        idx_u = letra_idx(map_unidad)
+                        idx_t = letra_idx(map_texto)
+                        idx_can = letra_idx(map_cant)
+                        idx_p = letra_idx(map_precio)
+                        idx_cost = letra_idx(map_coste) if map_coste != "No disponible" else -1
+                        
                         for index, row in df_h.iterrows():
-                            codigo_val = str(row[map_codigo]) if pd.notna(row[map_codigo]) else ""
-                            texto_val = str(row[map_texto]) if pd.notna(row[map_texto]) else ""
-                            precio_val = pd.to_numeric(row[map_precio], errors='coerce')
+                            # Filtro de seguridad por si la fila está vacía
+                            if len(row) <= max(idx_c, idx_u, idx_t, idx_can, idx_p): continue
                             
-                            # LOGICA DE CAPÍTULO: Si hay texto de resumen pero NO hay precio
-                            if texto_val and pd.isna(precio_val):
+                            codigo_val = str(row[idx_c]).strip() if pd.notna(row[idx_c]) else ""
+                            texto_val = str(row[idx_t]).strip() if pd.notna(row[idx_t]) else ""
+                            precio_val = pd.to_numeric(row[idx_p], errors='coerce')
+                            
+                            # Filtro: Ignoramos la fila si es la propia cabecera del Excel de Presto
+                            if "código" in codigo_val.lower() or "codigo" in codigo_val.lower():
+                                continue
+                            
+                            # LOGICA DE CAPÍTULO: Hay texto, NO hay precio, y no es la cabecera "Resumen"
+                            if texto_val and pd.isna(precio_val) and "resumen" not in texto_val.lower() and texto_val != "nan":
                                 capitulo_actual = texto_val
                             
-                            # LOGICA DE PARTIDA: Si hay código y precio, es una partida real que procesar
-                            elif codigo_val and pd.notna(precio_val):
-                                cantidad = pd.to_numeric(row[map_cant], errors='coerce')
+                            # LOGICA DE PARTIDA: Hay código válido y precio
+                            elif codigo_val and codigo_val != "nan" and pd.notna(precio_val):
+                                cantidad = pd.to_numeric(row[idx_can], errors='coerce')
                                 if pd.isna(cantidad): cantidad = 0.0
                                 
                                 coste = 0.0
-                                if map_coste != "No disponible":
-                                    coste_val = pd.to_numeric(row[map_coste], errors='coerce')
+                                if idx_cost != -1 and len(row) > idx_cost:
+                                    coste_val = pd.to_numeric(row[idx_cost], errors='coerce')
                                     if pd.notna(coste_val): coste = coste_val
                                 
-                                # Aplicando tu fórmula matemática
+                                # Matemáticas
                                 pr_pres = float(precio_val)
                                 precio_licitacion = pr_pres * (1 + (gg_bi / 100.0))
                                 precio_adjudicado = precio_licitacion * (1 - (baja / 100.0))
                                 importe_total = cantidad * precio_adjudicado
                                 
-                                # Partir la primera frase como nombre y guardar el resto en Descripción
+                                # Partir texto
                                 lineas_texto = texto_val.split('\n')
                                 partida_nombre = lineas_texto[0][:100] if lineas_texto else texto_val
                                 
-                                # Buscar el código de control
+                                # Diccionario
                                 cod_control_asignado = diccionario_codigos.get(codigo_val, "")
 
                                 filas_procesadas.append({
@@ -477,7 +499,7 @@ elif menu == "📥 Importar Presupuesto (Presto)":
                                     "Partida_Codigo": codigo_val,
                                     "Partida_Nombre": partida_nombre,
                                     "Partida_Descripcion": texto_val,
-                                    "Unidad": str(row[map_unidad]) if pd.notna(row[map_unidad]) else "",
+                                    "Unidad": str(row[idx_u]) if pd.notna(row[idx_u]) and str(row[idx_u]) != "nan" else "",
                                     "Cantidad_Proyecto": cantidad,
                                     "PrPres": pr_pres,
                                     "Precio_Licitacion": precio_licitacion,
