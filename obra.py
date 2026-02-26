@@ -433,6 +433,14 @@ elif menu == "📥 Importar Presupuesto (Presto)":
                         df_cod_ext = pd.read_excel(xls, sheet_name=hoja_cod, usecols="A:B", header=None, names=['Codigo', 'Grupo_Control'])
                         df_cod_ext = df_cod_ext.dropna(subset=['Codigo', 'Grupo_Control'])
                         diccionario_codigos = dict(zip(df_cod_ext['Codigo'].astype(str), df_cod_ext['Grupo_Control'].astype(str)))
+                        
+                        # --- NUEVO: PREPARAMOS LA TABLA DE CÓDIGOS PARA GUARDARLA ---
+                        df_para_guardar = df_cod_ext.copy()
+                        df_para_guardar.rename(columns={'Codigo': 'Cod_Control'}, inplace=True)
+                        # Añadimos las columnas de GG_BI y Baja con formato porcentaje
+                        df_para_guardar['GG_BI'] = f"{gg_bi}%"
+                        df_para_guardar['Baja'] = f"{baja}%"
+                        st.session_state.df_codigos_importacion = df_para_guardar
 
                     filas_procesadas = []
                     for hoja in hojas_pto:
@@ -459,11 +467,11 @@ elif menu == "📥 Importar Presupuesto (Presto)":
                             if "código" in codigo_val.lower() or "codigo" in codigo_val.lower():
                                 continue
                             
-                            # 1. ES UN CAPÍTULO: Tiene Código y Texto, pero NO precio
+                            # 1. ES UN CAPÍTULO
                             if codigo_val and texto_val and pd.isna(precio_val):
                                 capitulo_actual = texto_val
                             
-                            # 2. ES UNA PARTIDA: Tiene Código y Precio
+                            # 2. ES UNA PARTIDA
                             elif codigo_val and pd.notna(precio_val):
                                 cantidad = pd.to_numeric(row[idx_can], errors='coerce')
                                 if pd.isna(cantidad): cantidad = 0.0
@@ -484,8 +492,8 @@ elif menu == "📥 Importar Presupuesto (Presto)":
                                     "Cod_Control": cod_control_asignado,
                                     "Capítulo": capitulo_actual,
                                     "Partida_Codigo": codigo_val,
-                                    "Partida_Nombre": texto_val, # Guardamos el nombre corto
-                                    "Partida_Descripcion": texto_val, # Iniciamos la descripción
+                                    "Partida_Nombre": texto_val, 
+                                    "Partida_Descripcion": texto_val, 
                                     "Unidad": str(row[idx_u]) if pd.notna(row[idx_u]) and str(row[idx_u]) != "nan" else "",
                                     "Cantidad_Proyecto": cantidad,
                                     "PrPres": pr_pres,
@@ -495,9 +503,9 @@ elif menu == "📥 Importar Presupuesto (Presto)":
                                     "Importe_Total_Adjudicado": importe_total
                                 })
                                 
-                            # 3. ES UNA DESCRIPCIÓN CONTINUADA: No tiene Código, no tiene precio, pero SI texto
+                            # 3. ES UNA DESCRIPCIÓN CONTINUADA
                             elif not codigo_val and pd.isna(precio_val) and texto_val:
-                                if filas_procesadas: # Si ya existe al menos una partida antes
+                                if filas_procesadas: 
                                     filas_procesadas[-1]["Partida_Descripcion"] += "\n" + texto_val
                                 
                     df_resultado = pd.DataFrame(filas_procesadas)
@@ -507,13 +515,24 @@ elif menu == "📥 Importar Presupuesto (Presto)":
                     st.error(f"Error procesando el Excel: {e}")
 
         if 'df_importacion' in st.session_state and not st.session_state.df_importacion.empty:
-            st.subheader("👀 Vista Previa (Revisa que todo cuadre antes de guardar)")
+            st.subheader("👀 Vista Previa del Presupuesto")
             st.dataframe(st.session_state.df_importacion.head(50), use_container_width=True)
             
-            st.warning("⚠️ Al pulsar guardar, los datos sustituirán a los actuales en la pestaña 'Presupuesto_Base'.")
+            if 'df_codigos_importacion' in st.session_state:
+                st.subheader("👀 Vista Previa de Códigos de Control")
+                st.dataframe(st.session_state.df_codigos_importacion.head(5), use_container_width=True)
+            
+            st.warning("⚠️ Al pulsar guardar, los datos sustituirán a los actuales en tu Google Sheets.")
             if st.button("💾 CONFIRMAR Y SUBIR A BASE DE DATOS", type="primary"):
+                # Guardamos el Presupuesto
                 guardar_datos("Presupuesto_Base", st.session_state.df_importacion, url_obra)
-                st.success("🎉 ¡El presupuesto de Presto ha sido importado y estructurado a Google Sheets!")
+                
+                # --- NUEVO: GUARDAMOS LOS CÓDIGOS DE CONTROL ---
+                if 'df_codigos_importacion' in st.session_state:
+                    guardar_datos("Codigos_Control", st.session_state.df_codigos_importacion, url_obra)
+                    del st.session_state['df_codigos_importacion']
+                    
+                st.success("🎉 ¡El Presupuesto y los Códigos de Control han sido importados a Google Sheets!")
                 del st.session_state['df_importacion']
 
 # ==========================================
