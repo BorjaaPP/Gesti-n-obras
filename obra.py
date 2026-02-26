@@ -395,7 +395,6 @@ elif menu == "📥 Importar Presupuesto (Presto)":
         
         with st.form("form_config_importacion"):
             c1, c2 = st.columns(2)
-            # Sugerencias automáticas
             hojas_sugeridas = [h for h in hojas_excel if h.lower() in ["viviendas", "elementos comunes", "trasteros"]]
             hojas_pto = c1.multiselect("1. ¿Qué pestañas contienen el Presupuesto?", hojas_excel, default=hojas_sugeridas)
             
@@ -406,47 +405,40 @@ elif menu == "📥 Importar Presupuesto (Presto)":
             gg_bi = c3.number_input("3. % Gastos Generales y Beneficio Ind. (GG_BI)", value=15.00, step=1.0)
             baja = c4.number_input("4. % Baja de Adjudicación", value=1.20, step=0.1)
             
-            # Generamos la lista de letras de la A a la Z
             letras_excel = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z"]
             
             st.write("**5. Mapeo de Columnas (Elige la Letra de la columna en Excel)**")
             col1, col2, col3 = st.columns(3)
-            # Hemos puesto los índices por defecto que me dijiste (A, C, D...)
-            map_codigo = col1.selectbox("Columna 'Código' (Ej: A)", letras_excel, index=0) # A
-            map_unidad = col2.selectbox("Columna 'Unidad' (Ej: C)", letras_excel, index=2) # C
-            map_texto = col3.selectbox("Columna 'Resumen / Texto' (Ej: D)", letras_excel, index=3) # D
+            map_codigo = col1.selectbox("Columna 'Código' (Ej: A)", letras_excel, index=0) 
+            map_unidad = col2.selectbox("Columna 'Unidad' (Ej: C)", letras_excel, index=2) 
+            map_texto = col3.selectbox("Columna 'Resumen / Texto' (Ej: D)", letras_excel, index=3) 
             
             col4, col5, col6 = st.columns(3)
-            map_cant = col4.selectbox("Columna 'Cantidad' (Ej: E)", letras_excel, index=4) # E
-            map_precio = col5.selectbox("Columna 'Precio Base' (Ej: H)", letras_excel, index=7) # H
-            map_coste = col6.selectbox("Columna 'Coste Interno' [Opcional]", ["No disponible"] + letras_excel, index=12) # L es índice 11, pero sumamos 1 por el "No disponible"
+            map_cant = col4.selectbox("Columna 'Cantidad' (Ej: E)", letras_excel, index=4) 
+            map_precio = col5.selectbox("Columna 'Precio Base' (Ej: H)", letras_excel, index=7) 
+            map_coste = col6.selectbox("Columna 'Coste Interno' [Opcional]", ["No disponible"] + letras_excel, index=12) 
             
             btn_procesar = st.form_submit_button("🚀 Procesar Datos y Ver Tabla")
 
         if btn_procesar and hojas_pto:
-            with st.spinner("Procesando 'Forward Fill' y calculando los presupuestos matemáticos..."):
+            with st.spinner("Leyendo estructura de Presto y calculando presupuestos..."):
                 try:
                     df_resultado = pd.DataFrame()
                     
-                    # Función interna para pasar de "A" -> 0, "B" -> 1 (Para que Pandas lo entienda)
                     def letra_idx(letra):
                         return ord(letra) - 65
 
-                    # 1. Extraer Diccionario de Códigos "estudio partidas"
                     diccionario_codigos = {}
                     if hoja_cod != "Ninguna":
                         df_cod_ext = pd.read_excel(xls, sheet_name=hoja_cod, usecols="A:B", header=None, names=['Codigo', 'Grupo_Control'])
                         df_cod_ext = df_cod_ext.dropna(subset=['Codigo', 'Grupo_Control'])
                         diccionario_codigos = dict(zip(df_cod_ext['Codigo'].astype(str), df_cod_ext['Grupo_Control'].astype(str)))
 
-                    # 2. Procesar las pestañas de presupuesto seleccionadas
                     filas_procesadas = []
                     for hoja in hojas_pto:
-                        # header=None fuerza a Pandas a no comerse la fila 1 como título
                         df_h = pd.read_excel(xls, sheet_name=hoja, header=None)
                         capitulo_actual = "Sin Capítulo"
                         
-                        # Convertimos las letras elegidas a números
                         idx_c = letra_idx(map_codigo)
                         idx_u = letra_idx(map_unidad)
                         idx_t = letra_idx(map_texto)
@@ -455,23 +447,24 @@ elif menu == "📥 Importar Presupuesto (Presto)":
                         idx_cost = letra_idx(map_coste) if map_coste != "No disponible" else -1
                         
                         for index, row in df_h.iterrows():
-                            # Filtro de seguridad por si la fila está vacía
                             if len(row) <= max(idx_c, idx_u, idx_t, idx_can, idx_p): continue
                             
                             codigo_val = str(row[idx_c]).strip() if pd.notna(row[idx_c]) else ""
                             texto_val = str(row[idx_t]).strip() if pd.notna(row[idx_t]) else ""
                             precio_val = pd.to_numeric(row[idx_p], errors='coerce')
                             
-                            # Filtro: Ignoramos la fila si es la propia cabecera del Excel de Presto
+                            if codigo_val.lower() == "nan": codigo_val = ""
+                            if texto_val.lower() == "nan": texto_val = ""
+                            
                             if "código" in codigo_val.lower() or "codigo" in codigo_val.lower():
                                 continue
                             
-                            # LOGICA DE CAPÍTULO: Hay texto, NO hay precio, y no es la cabecera "Resumen"
-                            if texto_val and pd.isna(precio_val) and "resumen" not in texto_val.lower() and texto_val != "nan":
+                            # 1. ES UN CAPÍTULO: Tiene Código y Texto, pero NO precio
+                            if codigo_val and texto_val and pd.isna(precio_val):
                                 capitulo_actual = texto_val
                             
-                            # LOGICA DE PARTIDA: Hay código válido y precio
-                            elif codigo_val and codigo_val != "nan" and pd.notna(precio_val):
+                            # 2. ES UNA PARTIDA: Tiene Código y Precio
+                            elif codigo_val and pd.notna(precio_val):
                                 cantidad = pd.to_numeric(row[idx_can], errors='coerce')
                                 if pd.isna(cantidad): cantidad = 0.0
                                 
@@ -480,25 +473,19 @@ elif menu == "📥 Importar Presupuesto (Presto)":
                                     coste_val = pd.to_numeric(row[idx_cost], errors='coerce')
                                     if pd.notna(coste_val): coste = coste_val
                                 
-                                # Matemáticas
                                 pr_pres = float(precio_val)
                                 precio_licitacion = pr_pres * (1 + (gg_bi / 100.0))
                                 precio_adjudicado = precio_licitacion * (1 - (baja / 100.0))
                                 importe_total = cantidad * precio_adjudicado
                                 
-                                # Partir texto
-                                lineas_texto = texto_val.split('\n')
-                                partida_nombre = lineas_texto[0][:100] if lineas_texto else texto_val
-                                
-                                # Diccionario
                                 cod_control_asignado = diccionario_codigos.get(codigo_val, "")
 
                                 filas_procesadas.append({
                                     "Cod_Control": cod_control_asignado,
                                     "Capítulo": capitulo_actual,
                                     "Partida_Codigo": codigo_val,
-                                    "Partida_Nombre": partida_nombre,
-                                    "Partida_Descripcion": texto_val,
+                                    "Partida_Nombre": texto_val, # Guardamos el nombre corto
+                                    "Partida_Descripcion": texto_val, # Iniciamos la descripción
                                     "Unidad": str(row[idx_u]) if pd.notna(row[idx_u]) and str(row[idx_u]) != "nan" else "",
                                     "Cantidad_Proyecto": cantidad,
                                     "PrPres": pr_pres,
@@ -508,13 +495,17 @@ elif menu == "📥 Importar Presupuesto (Presto)":
                                     "Importe_Total_Adjudicado": importe_total
                                 })
                                 
+                            # 3. ES UNA DESCRIPCIÓN CONTINUADA: No tiene Código, no tiene precio, pero SI texto
+                            elif not codigo_val and pd.isna(precio_val) and texto_val:
+                                if filas_procesadas: # Si ya existe al menos una partida antes
+                                    filas_procesadas[-1]["Partida_Descripcion"] += "\n" + texto_val
+                                
                     df_resultado = pd.DataFrame(filas_procesadas)
                     st.session_state.df_importacion = df_resultado
                     st.success("✅ ¡Datos procesados correctamente!")
                 except Exception as e:
                     st.error(f"Error procesando el Excel: {e}")
 
-        # 3. Mostrar la Vista Previa y guardar
         if 'df_importacion' in st.session_state and not st.session_state.df_importacion.empty:
             st.subheader("👀 Vista Previa (Revisa que todo cuadre antes de guardar)")
             st.dataframe(st.session_state.df_importacion.head(50), use_container_width=True)
@@ -523,7 +514,7 @@ elif menu == "📥 Importar Presupuesto (Presto)":
             if st.button("💾 CONFIRMAR Y SUBIR A BASE DE DATOS", type="primary"):
                 guardar_datos("Presupuesto_Base", st.session_state.df_importacion, url_obra)
                 st.success("🎉 ¡El presupuesto de Presto ha sido importado y estructurado a Google Sheets!")
-                del st.session_state['df_importacion'] # Limpiamos memoria
+                del st.session_state['df_importacion']
 
 # ==========================================
 # 5. SUBCONTRATAS
