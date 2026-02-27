@@ -409,7 +409,7 @@ elif menu == "📥 Importar Presupuesto (Presto)":
             
             letras_excel = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z"]
             
-            st.write("**5. Mapeo de Columnas (Elige la Letra de la columna en Excel)**")
+            st.write("**5. Mapeo de Columnas: Pestañas de Presupuesto**")
             col1, col2, col3 = st.columns(3)
             map_codigo = col1.selectbox("Columna 'Código' (Ej: A)", letras_excel, index=0) 
             map_unidad = col2.selectbox("Columna 'Unidad' (Ej: C)", letras_excel, index=2) 
@@ -419,6 +419,11 @@ elif menu == "📥 Importar Presupuesto (Presto)":
             map_cant = col4.selectbox("Columna 'Cantidad' (Ej: E)", letras_excel, index=4) 
             map_precio = col5.selectbox("Columna 'Precio Base' (Ej: H)", letras_excel, index=7) 
             map_coste = col6.selectbox("Columna 'Coste Interno' [Opcional]", ["No disponible"] + letras_excel, index=12) 
+            
+            st.write("**6. Mapeo de Columnas: Pestaña de Códigos (Si aplica)**")
+            col7, col8 = st.columns(2)
+            map_cod_control = col7.selectbox("Columna de Códigos (Ej: A)", letras_excel, index=0)
+            map_grupo_control = col8.selectbox("Columna de Grupos (Ej: B)", letras_excel, index=1)
             
             btn_procesar = st.form_submit_button("🚀 Procesar Datos y Ver Tabla")
 
@@ -432,26 +437,27 @@ elif menu == "📥 Importar Presupuesto (Presto)":
 
                     diccionario_codigos = {}
                     if hoja_cod != "Ninguna":
-                        # Leemos la pestaña de códigos (columnas 0 y 1 son A y B)
-                        df_cod_ext = pd.read_excel(xls, sheet_name=hoja_cod, usecols=[0, 1], header=None)
+                        idx_cc = letra_idx(map_cod_control)
+                        idx_gc = letra_idx(map_grupo_control)
                         
-                        if df_cod_ext.shape[1] >= 2:
+                        # Leemos la pestaña entera y luego extraemos solo las columnas elegidas
+                        df_cod_ext_raw = pd.read_excel(xls, sheet_name=hoja_cod, header=None)
+                        
+                        if df_cod_ext_raw.shape[1] > max(idx_cc, idx_gc):
+                            df_cod_ext = df_cod_ext_raw.iloc[:, [idx_cc, idx_gc]].copy()
                             df_cod_ext.columns = ['Cod_Control', 'Grupo_Control']
                             
-                            # Limpiamos filas vacías
                             df_cod_ext = df_cod_ext.dropna(subset=['Cod_Control', 'Grupo_Control'])
-                            # Filtramos si se ha colado la cabecera de texto "Código" en la fila 1
                             df_cod_ext = df_cod_ext[~df_cod_ext['Cod_Control'].astype(str).str.contains("(?i)código|codigo|cod_control")]
                             
-                            # Creamos el diccionario eliminando espacios a los lados
                             diccionario_codigos = {str(k).strip(): str(v).strip() for k, v in zip(df_cod_ext['Cod_Control'], df_cod_ext['Grupo_Control'])}
                             
-                            # --- PREPARAMOS LA TABLA DE CÓDIGOS PARA GUARDARLA ---
+                            # Preparamos los datos para Google Sheets
                             df_para_guardar = df_cod_ext.copy()
+                            df_para_guardar['Cod_Control'] = df_para_guardar['Cod_Control'].astype(str).str.strip()
+                            df_para_guardar['Grupo_Control'] = df_para_guardar['Grupo_Control'].astype(str).str.strip()
                             df_para_guardar['GG_BI'] = f"{gg_bi}%"
                             df_para_guardar['Baja'] = f"{baja}%"
-                            
-                            # Eliminamos duplicados para que el diccionario quede limpio
                             df_para_guardar = df_para_guardar.drop_duplicates(subset=['Cod_Control'])
                             
                             st.session_state.df_codigos_importacion = df_para_guardar
@@ -474,7 +480,7 @@ elif menu == "📥 Importar Presupuesto (Presto)":
                             codigo_val = str(row[idx_c]).strip() if pd.notna(row[idx_c]) else ""
                             texto_val = str(row[idx_t]).strip() if pd.notna(row[idx_t]) else ""
                             
-                            # Limpieza de valores numéricos de excel español (por si acaso)
+                            # Limpieza por si hay números con formato raro
                             precio_raw = str(row[idx_p]).replace(".", "").replace(",", ".") if isinstance(row[idx_p], str) else row[idx_p]
                             precio_val = pd.to_numeric(precio_raw, errors='coerce')
                             
@@ -503,7 +509,6 @@ elif menu == "📥 Importar Presupuesto (Presto)":
                                 precio_adjudicado = precio_licitacion * (1 - (baja / 100.0))
                                 importe_total = cantidad * precio_adjudicado
                                 
-                                # Buscamos en el diccionario (limpiando espacios)
                                 cod_control_asignado = diccionario_codigos.get(codigo_val, "")
 
                                 filas_procesadas.append({
@@ -536,9 +541,12 @@ elif menu == "📥 Importar Presupuesto (Presto)":
             st.subheader("👀 Vista Previa del Presupuesto")
             st.dataframe(st.session_state.df_importacion.head(50), use_container_width=True)
             
-            if 'df_codigos_importacion' in st.session_state:
+            # Revisamos si la memoria de códigos existe y no está vacía
+            if 'df_codigos_importacion' in st.session_state and not st.session_state.df_codigos_importacion.empty:
                 st.subheader("👀 Vista Previa de Códigos de Control")
-                st.dataframe(st.session_state.df_codigos_importacion.head(5), use_container_width=True)
+                st.dataframe(st.session_state.df_codigos_importacion.head(50), use_container_width=True)
+            else:
+                st.warning("⚠️ No se ha encontrado ninguna lista de códigos de control válida. Asegúrate de haber elegido bien la Pestaña y las Letras en el Paso 6.")
             
             st.warning("⚠️ Al pulsar guardar, los datos sustituirán a los actuales en tu Google Sheets.")
             if st.button("💾 CONFIRMAR Y SUBIR A BASE DE DATOS", type="primary"):
@@ -546,7 +554,7 @@ elif menu == "📥 Importar Presupuesto (Presto)":
                 guardar_datos("Presupuesto_Base", st.session_state.df_importacion, url_obra)
                 
                 # GUARDAMOS LOS CÓDIGOS DE CONTROL
-                if 'df_codigos_importacion' in st.session_state:
+                if 'df_codigos_importacion' in st.session_state and not st.session_state.df_codigos_importacion.empty:
                     guardar_datos("Codigos_Control", st.session_state.df_codigos_importacion, url_obra)
                     del st.session_state['df_codigos_importacion']
                     
