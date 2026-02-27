@@ -444,17 +444,13 @@ elif menu == "📥 Importar Presupuesto (Presto)":
                             df_cod_ext = df_cod_ext_raw.iloc[:, [idx_cc, idx_gc]].copy()
                             df_cod_ext.columns = ['Cod_Control', 'Grupo_Control']
                             
-                            # Limpieza extrema: fuera .0, fuera nans, fuera espacios
                             df_cod_ext['Cod_Control'] = df_cod_ext['Cod_Control'].astype(str).replace(r'\.0$', '', regex=True).replace(['nan', 'None'], '').str.strip()
                             df_cod_ext['Grupo_Control'] = df_cod_ext['Grupo_Control'].astype(str).replace(r'\.0$', '', regex=True).replace(['nan', 'None'], '').str.strip()
                             
-                            # Si no hay código pero sí hay nombre de grupo, le ponemos SIN_CODIGO
                             df_cod_ext.loc[df_cod_ext['Cod_Control'] == '', 'Cod_Control'] = 'SIN_CODIGO'
                             
-                            # Nos quedamos solo con las filas que tienen texto en Grupo_Control
                             df_cod_ext = df_cod_ext[df_cod_ext['Grupo_Control'] != '']
                             
-                            # Quitamos la cabecera por si se cuela la palabra "Código"
                             df_cod_ext = df_cod_ext[~df_cod_ext['Cod_Control'].str.contains("(?i)código|codigo|cod_control", na=False)]
                             
                             diccionario_codigos = {k: v for k, v in zip(df_cod_ext['Cod_Control'], df_cod_ext['Grupo_Control'])}
@@ -481,7 +477,12 @@ elif menu == "📥 Importar Presupuesto (Presto)":
                         for index, row in df_h.iterrows():
                             if len(row) <= max(idx_c, idx_u, idx_t, idx_can, idx_p): continue
                             
-                            codigo_val = str(row[idx_c]).astype(str).replace(r'\.0$', '', regex=True).str.strip() if pd.notna(row[idx_c]) else ""
+                            # --- AQUÍ ESTABA EL ERROR (YA CORREGIDO) ---
+                            codigo_val = str(row[idx_c]).strip() if pd.notna(row[idx_c]) else ""
+                            if codigo_val.endswith('.0'): 
+                                codigo_val = codigo_val[:-2] # Quita el ".0" de forma segura
+                            # -------------------------------------------
+
                             texto_val = str(row[idx_t]).strip() if pd.notna(row[idx_t]) else ""
                             
                             precio_raw = str(row[idx_p]).replace(".", "").replace(",", ".") if isinstance(row[idx_p], str) else row[idx_p]
