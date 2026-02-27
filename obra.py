@@ -395,11 +395,13 @@ elif menu == "📥 Importar Presupuesto (Presto)":
         
         with st.form("form_config_importacion"):
             c1, c2 = st.columns(2)
-            hojas_sugeridas = [h for h in hojas_excel if h.lower() in ["viviendas", "elementos comunes", "trasteros"]]
+            # Buscamos ignorando mayúsculas y espacios
+            nombres_hojas_limpios = [h.lower().strip() for h in hojas_excel]
+            hojas_sugeridas = [h for h, h_limpio in zip(hojas_excel, nombres_hojas_limpios) if h_limpio in ["viviendas", "elementos comunes", "trasteros"]]
             hojas_pto = c1.multiselect("1. ¿Qué pestañas contienen el Presupuesto?", hojas_excel, default=hojas_sugeridas)
             
-            idx_cod = hojas_excel.index("estudio partidas") if "estudio partidas" in hojas_excel else 0
-            hoja_cod = c2.selectbox("2. ¿Qué pestaña contiene los Códigos de Control?", ["Ninguna"] + hojas_excel, index=idx_cod + 1 if "estudio partidas" in hojas_excel else 0)
+            idx_cod = nombres_hojas_limpios.index("estudio partidas") if "estudio partidas" in nombres_hojas_limpios else -1
+            hoja_cod = c2.selectbox("2. ¿Qué pestaña contiene los Códigos de Control?", ["Ninguna"] + hojas_excel, index=idx_cod + 1 if idx_cod != -1 else 0)
             
             c3, c4 = st.columns(2)
             gg_bi = c3.number_input("3. % Gastos Generales y Beneficio Ind. (GG_BI)", value=15.00, step=1.0)
@@ -430,17 +432,29 @@ elif menu == "📥 Importar Presupuesto (Presto)":
 
                     diccionario_codigos = {}
                     if hoja_cod != "Ninguna":
-                        df_cod_ext = pd.read_excel(xls, sheet_name=hoja_cod, usecols="A:B", header=None, names=['Codigo', 'Grupo_Control'])
-                        df_cod_ext = df_cod_ext.dropna(subset=['Codigo', 'Grupo_Control'])
-                        diccionario_codigos = dict(zip(df_cod_ext['Codigo'].astype(str), df_cod_ext['Grupo_Control'].astype(str)))
+                        # Leemos la pestaña de códigos (columnas 0 y 1 son A y B)
+                        df_cod_ext = pd.read_excel(xls, sheet_name=hoja_cod, usecols=[0, 1], header=None)
                         
-                        # --- NUEVO: PREPARAMOS LA TABLA DE CÓDIGOS PARA GUARDARLA ---
-                        df_para_guardar = df_cod_ext.copy()
-                        df_para_guardar.rename(columns={'Codigo': 'Cod_Control'}, inplace=True)
-                        # Añadimos las columnas de GG_BI y Baja con formato porcentaje
-                        df_para_guardar['GG_BI'] = f"{gg_bi}%"
-                        df_para_guardar['Baja'] = f"{baja}%"
-                        st.session_state.df_codigos_importacion = df_para_guardar
+                        if df_cod_ext.shape[1] >= 2:
+                            df_cod_ext.columns = ['Cod_Control', 'Grupo_Control']
+                            
+                            # Limpiamos filas vacías
+                            df_cod_ext = df_cod_ext.dropna(subset=['Cod_Control', 'Grupo_Control'])
+                            # Filtramos si se ha colado la cabecera de texto "Código" en la fila 1
+                            df_cod_ext = df_cod_ext[~df_cod_ext['Cod_Control'].astype(str).str.contains("(?i)código|codigo|cod_control")]
+                            
+                            # Creamos el diccionario eliminando espacios a los lados
+                            diccionario_codigos = {str(k).strip(): str(v).strip() for k, v in zip(df_cod_ext['Cod_Control'], df_cod_ext['Grupo_Control'])}
+                            
+                            # --- PREPARAMOS LA TABLA DE CÓDIGOS PARA GUARDARLA ---
+                            df_para_guardar = df_cod_ext.copy()
+                            df_para_guardar['GG_BI'] = f"{gg_bi}%"
+                            df_para_guardar['Baja'] = f"{baja}%"
+                            
+                            # Eliminamos duplicados para que el diccionario quede limpio
+                            df_para_guardar = df_para_guardar.drop_duplicates(subset=['Cod_Control'])
+                            
+                            st.session_state.df_codigos_importacion = df_para_guardar
 
                     filas_procesadas = []
                     for hoja in hojas_pto:
@@ -459,7 +473,10 @@ elif menu == "📥 Importar Presupuesto (Presto)":
                             
                             codigo_val = str(row[idx_c]).strip() if pd.notna(row[idx_c]) else ""
                             texto_val = str(row[idx_t]).strip() if pd.notna(row[idx_t]) else ""
-                            precio_val = pd.to_numeric(row[idx_p], errors='coerce')
+                            
+                            # Limpieza de valores numéricos de excel español (por si acaso)
+                            precio_raw = str(row[idx_p]).replace(".", "").replace(",", ".") if isinstance(row[idx_p], str) else row[idx_p]
+                            precio_val = pd.to_numeric(precio_raw, errors='coerce')
                             
                             if codigo_val.lower() == "nan": codigo_val = ""
                             if texto_val.lower() == "nan": texto_val = ""
@@ -486,6 +503,7 @@ elif menu == "📥 Importar Presupuesto (Presto)":
                                 precio_adjudicado = precio_licitacion * (1 - (baja / 100.0))
                                 importe_total = cantidad * precio_adjudicado
                                 
+                                # Buscamos en el diccionario (limpiando espacios)
                                 cod_control_asignado = diccionario_codigos.get(codigo_val, "")
 
                                 filas_procesadas.append({
@@ -527,7 +545,7 @@ elif menu == "📥 Importar Presupuesto (Presto)":
                 # Guardamos el Presupuesto
                 guardar_datos("Presupuesto_Base", st.session_state.df_importacion, url_obra)
                 
-                # --- NUEVO: GUARDAMOS LOS CÓDIGOS DE CONTROL ---
+                # GUARDAMOS LOS CÓDIGOS DE CONTROL
                 if 'df_codigos_importacion' in st.session_state:
                     guardar_datos("Codigos_Control", st.session_state.df_codigos_importacion, url_obra)
                     del st.session_state['df_codigos_importacion']
