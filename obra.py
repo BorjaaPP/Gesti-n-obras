@@ -334,21 +334,25 @@ elif menu == "📈 Informe Ejecutivo (Finanzas)":
         df_pto_obra = df_pto.copy()
         df_cert_obra = df_cert.copy() if not df_cert.empty else pd.DataFrame()
         
-        # 1. Limpiamos los códigos para que coincidan perfectamente (quitamos espacios y forzamos texto)
+        # 1. Limpiamos los códigos para que coincidan perfectamente
         df_codigos['Cod_Control'] = df_codigos['Cod_Control'].astype(str).replace(r'\.0$', '', regex=True).str.strip()
         df_pto_obra['Cod_Control'] = df_pto_obra['Cod_Control'].astype(str).replace(r'\.0$', '', regex=True).str.strip()
         
-        # 2. Aseguramos que los valores a sumar sean números
+        # 2. Aseguramos que los valores sean números antes de operar
         df_pto_obra['Coste'] = pd.to_numeric(df_pto_obra['Coste'], errors='coerce').fillna(0)
+        df_pto_obra['Cantidad_Proyecto'] = pd.to_numeric(df_pto_obra['Cantidad_Proyecto'], errors='coerce').fillna(0)
         df_pto_obra['Importe_Total_Adjudicado'] = pd.to_numeric(df_pto_obra['Importe_Total_Adjudicado'], errors='coerce').fillna(0)
         
-        # 3. Agrupamos el Presupuesto sumando los valores de Coste y Adjudicado por Cod_Control
+        # --- LA CORRECCIÓN MATEMÁTICA: Coste Unitario x Cantidad ---
+        df_pto_obra['Coste_Total_Fila'] = df_pto_obra['Coste'] * df_pto_obra['Cantidad_Proyecto']
+        
+        # 3. Agrupamos el Presupuesto sumando los totales por Cod_Control
         resumen_pto = df_pto_obra.groupby('Cod_Control').agg(
-            Coste_Presupuestado=('Coste', 'sum'),
+            Coste_Presupuestado=('Coste_Total_Fila', 'sum'),
             Presupuesto_Adjudicado=('Importe_Total_Adjudicado', 'sum')
         ).reset_index()
 
-        # 4. Preparamos las Certificaciones (Ya dejamos el hueco listo para el futuro)
+        # 4. Preparamos las Certificaciones
         resumen_cert = pd.DataFrame(columns=['Cod_Control', 'Total_Certificado'])
         if not df_cert_obra.empty and 'Importe_Certificado_Mes_1' in df_cert_obra.columns:
             df_cert_obra['Cod_Control'] = df_cert_obra['Cod_Control'].astype(str).replace(r'\.0$', '', regex=True).str.strip()
@@ -386,13 +390,14 @@ elif menu == "📈 Informe Ejecutivo (Finanzas)":
         # KPIs Generales Totales
         st.divider()
         c1, c2, c3 = st.columns(3)
+        total_coste_pto = informe_final['Coste_Presupuestado'].sum()
         total_adj = informe_final['Presupuesto_Adjudicado'].sum()
         total_cert = informe_final['Total_Certificado'].sum()
         avance_global = (total_cert / total_adj * 100) if total_adj > 0 else 0
         
-        c1.metric("Total Presupuesto Adjudicado", f"{total_adj:,.2f} €")
-        c2.metric("Total Certificado a Origen", f"{total_cert:,.2f} €")
-        c3.metric("% Avance Global Certificado", f"{avance_global:.2f} %")
+        c1.metric("Coste Base Total (Licitación)", f"{total_coste_pto:,.2f} €")
+        c2.metric("Total Presupuesto Adjudicado", f"{total_adj:,.2f} €")
+        c3.metric("% Avance Global Certificado", f"{avance_global:.2f} %", f"{total_cert:,.2f} €")
 
 # ==========================================
 # 4. MÓDULO NUEVO: IMPORTADOR MÁGICO DE PRESTO
