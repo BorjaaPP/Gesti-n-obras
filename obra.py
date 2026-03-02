@@ -322,60 +322,77 @@ elif menu == "📊 Costes y Rendimientos":
 elif menu == "📈 Informe Ejecutivo (Finanzas)":
     st.title(f"📈 Informe Ejecutivo: {obra_actual}")
     
-    with st.expander("📖 Ver Diccionario de Grupos de Control", expanded=False):
-        df_codigos = cargar_datos("Codigos_Control", url_obra)
-        if not df_codigos.empty:
-            st.dataframe(df_codigos, hide_index=True)
-        else:
-            st.warning("No has creado la pestaña 'Codigos_Control' en tu Google Sheets.")
-
+    df_codigos = cargar_datos("Codigos_Control", url_obra)
     df_pto = cargar_datos("Presupuesto_Base", url_obra)
     df_cert = cargar_datos("Certificaciones_Ingresos", url_obra)
     
-    if df_pto.empty:
+    if df_codigos.empty:
+        st.warning("⚠️ No se ha encontrado la pestaña 'Codigos_Control' o está vacía. Añade tus códigos para ver el resumen.")
+    elif df_pto.empty:
         st.info("Aún no has cargado el Presupuesto Base de esta obra.")
     else:
         df_pto_obra = df_pto.copy()
         df_cert_obra = df_cert.copy() if not df_cert.empty else pd.DataFrame()
         
+        # 1. Limpiamos los códigos para que coincidan perfectamente (quitamos espacios y forzamos texto)
+        df_codigos['Cod_Control'] = df_codigos['Cod_Control'].astype(str).replace(r'\.0$', '', regex=True).str.strip()
+        df_pto_obra['Cod_Control'] = df_pto_obra['Cod_Control'].astype(str).replace(r'\.0$', '', regex=True).str.strip()
+        
+        # 2. Aseguramos que los valores a sumar sean números
+        df_pto_obra['Coste'] = pd.to_numeric(df_pto_obra['Coste'], errors='coerce').fillna(0)
         df_pto_obra['Importe_Total_Adjudicado'] = pd.to_numeric(df_pto_obra['Importe_Total_Adjudicado'], errors='coerce').fillna(0)
         
-        if not df_codigos.empty and 'Cod_Control' in df_pto_obra.columns:
-            df_pto_obra['Cod_Control'] = df_pto_obra['Cod_Control'].astype(str)
-            df_codigos['Cod_Control'] = df_codigos['Cod_Control'].astype(str)
-            df_pto_obra = df_pto_obra.merge(df_codigos, on='Cod_Control', how='left')
-            df_pto_obra['Grupo_Control'] = df_pto_obra['Grupo_Control'].fillna("Sin Asignar")
-        else:
-            df_pto_obra['Grupo_Control'] = "Sin Grupo"
+        # 3. Agrupamos el Presupuesto sumando los valores de Coste y Adjudicado por Cod_Control
+        resumen_pto = df_pto_obra.groupby('Cod_Control').agg(
+            Coste_Presupuestado=('Coste', 'sum'),
+            Presupuesto_Adjudicado=('Importe_Total_Adjudicado', 'sum')
+        ).reset_index()
 
-        resumen_pto = df_pto_obra.groupby(['Cod_Control', 'Grupo_Control'])['Importe_Total_Adjudicado'].sum().reset_index()
-
+        # 4. Preparamos las Certificaciones (Ya dejamos el hueco listo para el futuro)
         resumen_cert = pd.DataFrame(columns=['Cod_Control', 'Total_Certificado'])
         if not df_cert_obra.empty and 'Importe_Certificado_Mes_1' in df_cert_obra.columns:
+            df_cert_obra['Cod_Control'] = df_cert_obra['Cod_Control'].astype(str).replace(r'\.0$', '', regex=True).str.strip()
             df_cert_obra['Importe_Certificado_Mes_1'] = pd.to_numeric(df_cert_obra['Importe_Certificado_Mes_1'], errors='coerce').fillna(0)
-            df_cert_obra['Cod_Control'] = df_cert_obra['Cod_Control'].astype(str)
             resumen_cert = df_cert_obra.groupby('Cod_Control').agg(Total_Certificado=('Importe_Certificado_Mes_1', 'sum')).reset_index()
 
-        if not resumen_pto.empty:
-            informe_final = pd.merge(resumen_pto, resumen_cert, on='Cod_Control', how='left').fillna(0)
-            informe_final['% Avance'] = (informe_final['Total_Certificado'] / informe_final['Importe_Total_Adjudicado']) * 100
-            informe_final['% Avance'] = informe_final['% Avance'].fillna(0)
-            
-            st.subheader(f"Estado de Licitación vs Facturación")
-            st.dataframe(
-                informe_final.style.format({
-                    "Importe_Total_Adjudicado": "{:,.2f} €",
-                    "Total_Certificado": "{:,.2f} €",
-                    "% Avance": "{:.1f} %"
-                }).bar(subset=['% Avance'], color='#5fba7d', vmax=100),
-                use_container_width=True, hide_index=True
-            )
-            
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Presupuesto Adjudicado", f"{informe_final['Importe_Total_Adjudicado'].sum():,.2f} €")
-            c2.metric("Total Certificado a Origen", f"{informe_final['Total_Certificado'].sum():,.2f} €")
-            avance_total = (informe_final['Total_Certificado'].sum() / informe_final['Importe_Total_Adjudicado'].sum()) * 100 if informe_final['Importe_Total_Adjudicado'].sum() > 0 else 0
-            c3.metric("% Avance Global de Obra", f"{avance_total:.2f} %")
+        # 5. Cruzamos los datos usando "Codigos_Control" como esqueleto principal
+        informe_final = df_codigos.merge(resumen_pto, on='Cod_Control', how='left')
+        informe_final = informe_final.merge(resumen_cert, on='Cod_Control', how='left')
+        
+        # Rellenamos los vacíos con 0
+        informe_final['Coste_Presupuestado'] = informe_final['Coste_Presupuestado'].fillna(0)
+        informe_final['Presupuesto_Adjudicado'] = informe_final['Presupuesto_Adjudicado'].fillna(0)
+        informe_final['Total_Certificado'] = informe_final['Total_Certificado'].fillna(0)
+        
+        # 6. Calculamos el % de Avance de la Certificación respecto al Adjudicado
+        informe_final['% Certificado'] = (informe_final['Total_Certificado'] / informe_final['Presupuesto_Adjudicado']) * 100
+        informe_final['% Certificado'] = informe_final['% Certificado'].fillna(0).replace([float('inf'), -float('inf')], 0)
+        
+        # --- INTERFAZ VISUAL ---
+        st.subheader("📊 Control de Licitación vs. Certificación (EDT)")
+        st.write("Esta tabla se genera en tiempo real cruzando tu lista de códigos con el Presupuesto y las Certificaciones. *Los costes reales (albaranes/nóminas) se analizarán en otro módulo.*")
+        
+        # Mostramos la tabla con barras de progreso para la certificación
+        st.dataframe(
+            informe_final.style.format({
+                "Coste_Presupuestado": "{:,.2f} €",
+                "Presupuesto_Adjudicado": "{:,.2f} €",
+                "Total_Certificado": "{:,.2f} €",
+                "% Certificado": "{:.2f} %"
+            }).bar(subset=['% Certificado'], color='#5fba7d', vmax=100),
+            use_container_width=True, hide_index=True
+        )
+        
+        # KPIs Generales Totales
+        st.divider()
+        c1, c2, c3 = st.columns(3)
+        total_adj = informe_final['Presupuesto_Adjudicado'].sum()
+        total_cert = informe_final['Total_Certificado'].sum()
+        avance_global = (total_cert / total_adj * 100) if total_adj > 0 else 0
+        
+        c1.metric("Total Presupuesto Adjudicado", f"{total_adj:,.2f} €")
+        c2.metric("Total Certificado a Origen", f"{total_cert:,.2f} €")
+        c3.metric("% Avance Global Certificado", f"{avance_global:.2f} %")
 
 # ==========================================
 # 4. MÓDULO NUEVO: IMPORTADOR MÁGICO DE PRESTO
