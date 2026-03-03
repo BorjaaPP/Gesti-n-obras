@@ -507,6 +507,10 @@ elif vista_activa == "Importar Certificación":
                         df_base = df_pto[['Cod_Control', 'Capítulo', 'Partida_Codigo', 'Partida_Nombre', 'Unidad', 'Precio_Adjudicado']].copy()
                     else:
                         df_base = df_cert_db.copy()
+                        # --- PARCHE DE SEGURIDAD: Si falta el precio en la BD de certificaciones, lo rescata del Presupuesto ---
+                        if 'Precio_Adjudicado' not in df_base.columns:
+                            dict_precios = dict(zip(df_pto['Partida_Codigo'], df_pto['Precio_Adjudicado']))
+                            df_base['Precio_Adjudicado'] = df_base['Partida_Codigo'].map(dict_precios).fillna(0.0)
 
                     col_cant_mes = f"Cantidad_Mes_{mes_cert}"
                     col_imp_mes = f"Importe_Mes_{mes_cert}"
@@ -528,7 +532,7 @@ elif vista_activa == "Importar Certificación":
                         can_val = pd.to_numeric(str(row[letra_idx(map_can)]).replace(",", "."), errors='coerce')
 
                         if pd.isna(can_val) or can_val == 0: continue
-                        if "código" in cod_val.lower(): continue
+                        if "código" in cod_val.lower() or "codigo" in cod_val.lower(): continue
 
                         match_idx = -1
                         if cod_val and cod_val in pto_codigos:
@@ -564,6 +568,7 @@ elif vista_activa == "Importar Certificación":
                 guardar_datos("Certificaciones_Ingresos", st.session_state.df_cert_importacion, url_obra)
                 st.success("Certificación registrada.")
                 del st.session_state['df_cert_importacion']
+
 
 # ==========================================
 # 5. SUBCONTRATAS
