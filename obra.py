@@ -473,26 +473,32 @@ elif vista_activa == "Importar Presupuesto":
                 del st.session_state['df_importacion']
 
 # ==========================================
-# 4.1 IMPORTAR CERTIFICACIÓN (ESTRICTA)
+# 4.1 IMPORTAR CERTIFICACIÓN (ESTRICTA PERO FLEXIBLE CON ESPACIOS)
 # ==========================================
 elif vista_activa == "Importar Certificación":
     st.title("Importación de Certificación de Producción")
-    st.markdown("Macheo estricto contra Presupuesto Base.")
+    st.markdown("Macheo estricto contra Presupuesto Base. (Filtro inteligente de espacios y mayúsculas activado).")
     
-    archivo_cert = st.file_uploader("Subir Archivo de Certificación (.xlsx)", type=['xlsx', 'xls'])
+    archivo_cert = st.file_uploader("Subir Archivo de Certificación (.xlsx o .csv)", type=['xlsx', 'xls', 'csv'])
     if archivo_cert:
-        xls_cert = pd.ExcelFile(archivo_cert)
+        # Detectar si es CSV o Excel
+        if archivo_cert.name.endswith('.csv'):
+            xls_cert = None
+            hojas_cert = ["Hoja CSV"]
+        else:
+            xls_cert = pd.ExcelFile(archivo_cert)
+            hojas_cert = xls_cert.sheet_names
+
         with st.form("form_certificacion"):
             c1, c2 = st.columns(2)
             mes_cert = c1.number_input("Mes de Certificación (Ej: 1, 2...)", min_value=1, step=1)
-            hoja_cert = c2.selectbox("Pestaña del documento", xls_cert.sheet_names, index=0)
+            hoja_cert = c2.selectbox("Pestaña del documento", hojas_cert, index=0)
             
             letras_excel = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z"]
             
-            # --- NUEVA DISTRIBUCIÓN A 4 COLUMNAS ---
             col1, col2, col3, col4 = st.columns(4)
             map_cod = col1.selectbox("Col. 'Código'", letras_excel, index=0) # Por defecto A
-            map_nat = col2.selectbox("Col. 'Naturaleza'", ["Omitir"] + letras_excel, index=2) # Por defecto B
+            map_nat = col2.selectbox("Col. 'Naturaleza'", ["Omitir"] + letras_excel, index=1) # Por defecto B
             map_nom = col3.selectbox("Col. 'Nombre'", letras_excel, index=3) # Por defecto D
             map_can = col4.selectbox("Col. 'Cantidad'", letras_excel, index=4) # Por defecto E
             
@@ -504,12 +510,18 @@ elif vista_activa == "Importar Certificación":
                     st.error("Presupuesto Base no encontrado. Importación abortada.")
                 else:
                     def letra_idx(letra): return ord(letra) - 65
-                    df_excel = pd.read_excel(xls_cert, sheet_name=hoja_cert, header=None)
+                    
+                    # Leer el archivo dependiendo de si es CSV o Excel
+                    if xls_cert is None:
+                        df_excel = pd.read_csv(archivo_cert, header=None)
+                    else:
+                        df_excel = pd.read_excel(xls_cert, sheet_name=hoja_cert, header=None)
 
                     if df_cert_db.empty or 'Partida_Codigo' not in df_cert_db.columns:
                         df_base = df_pto[['Cod_Control', 'Capítulo', 'Partida_Codigo', 'Partida_Nombre', 'Unidad', 'Precio_Adjudicado']].copy()
                     else:
                         df_base = df_cert_db.copy()
+                        # Parche de seguridad: si falta el precio, lo rescatamos
                         if 'Precio_Adjudicado' not in df_base.columns:
                             dict_precios = dict(zip(df_pto['Partida_Codigo'], df_pto['Precio_Adjudicado']))
                             df_base['Precio_Adjudicado'] = df_base['Partida_Codigo'].map(dict_precios).fillna(0.0)
@@ -520,7 +532,9 @@ elif vista_activa == "Importar Certificación":
                     df_base[col_imp_mes] = 0.0
 
                     pto_codigos = df_base['Partida_Codigo'].astype(str).replace(r'\.0$', '', regex=True).str.strip().tolist()
-                    pto_nombres = df_base['Partida_Nombre'].astype(str).str.strip().str.lower().tolist()
+                    
+                    # --- MAGIA 1: Normalizamos los nombres de la BD (minúsculas y quitamos espacios dobles) ---
+                    pto_nombres = df_base['Partida_Nombre'].astype(str).str.lower().apply(lambda x: " ".join(x.split())).tolist()
 
                     huerfanas = []
                     encontradas = 0
@@ -528,27 +542,37 @@ elif vista_activa == "Importar Certificación":
                     for index, row in df_excel.iterrows():
                         if len(row) <= max(letra_idx(map_cod), letra_idx(map_nom), letra_idx(map_can)): continue
 
-                        # --- EL FILTRO DE CAPÍTULOS ---
+                        # --- FILTRO 1: Ignorar Capítulos ---
                         if map_nat != "Omitir":
                             idx_nat = letra_idx(map_nat)
                             if len(row) > idx_nat and pd.notna(row[idx_nat]):
                                 nat_val = str(row[idx_nat]).strip().lower()
                                 if "capítulo" in nat_val or "capitulo" in nat_val:
-                                    continue # Salta a la siguiente fila ignorando esta
+                                    continue 
 
                         cod_val = str(row[letra_idx(map_cod)]).strip() if pd.notna(row[letra_idx(map_cod)]) else ""
                         if cod_val.endswith('.0'): cod_val = cod_val[:-2]
+                        
                         nom_val = str(row[letra_idx(map_nom)]).strip() if pd.notna(row[letra_idx(map_nom)]) else ""
-                        can_val = pd.to_numeric(str(row[letra_idx(map_can)]).replace(",", "."), errors='coerce')
+                        
+                        can_raw = str(row[letra_idx(map_can)]).replace(".", "").replace(",", ".") if isinstance(row[letra_idx(map_can)], str) else row[letra_idx(map_can)]
+                        can_val = pd.to_numeric(can_raw, errors='coerce')
 
                         if pd.isna(can_val) or can_val == 0: continue
-                        if "código" in cod_val.lower() or "codigo" in cod_val.lower(): continue
+                        if "código" in cod_val.lower() or "codigo" in cod_val.lower() or "cancert" in cod_val.lower(): continue
+                        
+                        # --- FILTRO 2: Ignorar filas fantasma (sin código y con nombre numérico o vacío) ---
+                        if cod_val == "" and (nom_val == "" or nom_val.replace(".", "").replace(",", "").isnumeric()): 
+                            continue
+
+                        # --- MAGIA 2: Normalizamos el nombre que viene del Excel para compararlo ---
+                        nom_val_norm = " ".join(nom_val.lower().split())
 
                         match_idx = -1
                         if cod_val and cod_val in pto_codigos:
                             match_idx = pto_codigos.index(cod_val)
-                        elif nom_val and nom_val.lower() in pto_nombres:
-                            match_idx = pto_nombres.index(nom_val.lower())
+                        elif nom_val_norm and nom_val_norm in pto_nombres:
+                            match_idx = pto_nombres.index(nom_val_norm)
 
                         if match_idx != -1:
                             precio = pd.to_numeric(df_base.at[match_idx, 'Precio_Adjudicado'], errors='coerce')
@@ -562,21 +586,21 @@ elif vista_activa == "Importar Certificación":
                             df_base.at[match_idx, col_imp_mes] = cant_mes_actual * precio
                             encontradas += 1
                         else:
-                            huerfanas.append({"Código": cod_val, "Nombre": nom_val, "Cantidad": can_val})
+                            huerfanas.append({"Código": cod_val, "Nombre Original": nom_val, "Cantidad": can_val})
 
                     if huerfanas:
                         st.error(f"Validación Fallida: {len(huerfanas)} partidas no registradas en el Presupuesto Base.")
-                        st.markdown("Corrige el archivo original o añade estas partidas al Presupuesto Base.")
+                        st.markdown("Revisa si son partidas nuevas o si el código/nombre difiere completamente. (Los espacios dobles ya no son problema).")
                         st.dataframe(pd.DataFrame(huerfanas), use_container_width=True)
                         if 'df_cert_importacion' in st.session_state: del st.session_state['df_cert_importacion']
                     else:
-                        st.success(f"Validación Exitosa. {encontradas} partidas mapeadas.")
+                        st.success(f"Validación Exitosa. {encontradas} partidas mapeadas correctamente.")
                         st.session_state.df_cert_importacion = df_base
 
         if 'df_cert_importacion' in st.session_state and not st.session_state.df_cert_importacion.empty:
             if st.button("Confirmar y Guardar Certificación", type="primary"):
                 guardar_datos("Certificaciones_Ingresos", st.session_state.df_cert_importacion, url_obra)
-                st.success("Certificación registrada.")
+                st.success("Certificación registrada y volcada al Informe Ejecutivo.")
                 del st.session_state['df_cert_importacion']
 
 
