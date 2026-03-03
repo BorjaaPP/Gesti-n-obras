@@ -174,30 +174,35 @@ url_obra = obras_activas[obras_activas['Nombre_Proyecto'] == obra_actual]['Enlac
 
 st.sidebar.markdown('<hr>', unsafe_allow_html=True)
 
+# --- LÓGICA DE NAVEGACIÓN INSTANTÁNEA ---
+if 'vista_activa' not in st.session_state:
+    st.session_state.vista_activa = "Gestión de Obras (Diario)"
+
+def cambiar_vista_proyecto():
+    st.session_state.vista_activa = st.session_state.rad_proj
+
+def cambiar_vista_global():
+    st.session_state.vista_activa = st.session_state.rad_glob
+
 st.sidebar.markdown('<p class="small-text">MÓDULOS DEL PROYECTO</p>', unsafe_allow_html=True)
-menu_proyecto = st.sidebar.radio("", [
+st.sidebar.radio("", [
     "Gestión de Obras (Diario)",
     "Costes y Rendimientos",
     "Informe Ejecutivo (Finanzas)",
     "Importar Presupuesto",
     "Importar Certificación",
     "Subcontratas"
-], key="rad_proj", label_visibility="collapsed")
+], key="rad_proj", label_visibility="collapsed", on_change=cambiar_vista_proyecto)
 
 st.sidebar.markdown('<hr>', unsafe_allow_html=True)
 
 st.sidebar.markdown('<p class="small-text">BASES DE DATOS GLOBALES</p>', unsafe_allow_html=True)
-menu_global = st.sidebar.radio("", [
+st.sidebar.radio("", [
     "Base de Precios",
     "Tarifas (Personal/Maquinaria)"
-], key="rad_glob", label_visibility="collapsed")
+], key="rad_glob", label_visibility="collapsed", on_change=cambiar_vista_global)
 
-# Lógica de navegación mediante botones muy discretos para alternar contextos
-col1, col2 = st.sidebar.columns(2)
-if col1.button("Ver Proyecto"): st.session_state['vista_activa'] = menu_proyecto
-if col2.button("Ver Global"): st.session_state['vista_activa'] = menu_global
-
-vista_activa = st.session_state.get('vista_activa', menu_proyecto)
+vista_activa = st.session_state.vista_activa
 
 # ==========================================
 # 1. GESTIÓN DE OBRAS Y DIARIO
