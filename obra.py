@@ -10,19 +10,19 @@ import re
 # --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(page_title="ERP Construcción", layout="wide", initial_sidebar_state="expanded")
 
-# --- ESTÉTICA VAPI.AI (INYECCIÓN DE CSS) ---
+# --- ESTÉTICA VERDE CLARO PROFESIONAL (INYECCIÓN DE CSS) ---
 st.markdown("""
     <style>
-    /* Fondo principal y color de texto (Dark Mode profundo) */
+    /* Fondo principal y color de texto (Tonos claros y legibles) */
     .stApp {
-        background-color: #09090b;
-        color: #f4f4f5;
+        background-color: #f4f9f5;
+        color: #1a3324;
     }
     
     /* Barra lateral */
     [data-testid="stSidebar"] {
-        background-color: #121214 !important;
-        border-right: 1px solid #27272a;
+        background-color: #e6f0ea !important;
+        border-right: 1px solid #cce0d5;
     }
     
     /* Quitar el padding gigante superior de la barra lateral */
@@ -32,19 +32,20 @@ st.markdown("""
     
     /* Compactar botones de radio (el menú) */
     .stRadio [role="radiogroup"] {
-        gap: 0.1rem !important; /* Espacio mínimo entre opciones */
+        gap: 0.1rem !important;
     }
     .stRadio label {
         padding: 2px 0px !important;
         font-size: 0.85rem !important;
+        color: #2d4d3a !important;
     }
     
     /* Diseño de los selectores y campos de entrada */
-    .stSelectbox div[data-baseweb="select"], .stTextInput input, .stNumberInput input {
-        background-color: #18181b !important;
-        border: 1px solid #27272a !important;
+    .stSelectbox div[data-baseweb="select"], .stTextInput input, .stNumberInput input, .stTextArea textarea {
+        background-color: #ffffff !important;
+        border: 1px solid #b3ccbe !important;
         border-radius: 4px !important;
-        color: #e4e4e7 !important;
+        color: #1a3324 !important;
         font-size: 0.85rem !important;
         min-height: 32px !important;
     }
@@ -53,13 +54,13 @@ st.markdown("""
     hr {
         margin-top: 0.5rem !important;
         margin-bottom: 0.5rem !important;
-        border-color: #27272a !important;
+        border-color: #cce0d5 !important;
     }
     
     /* Textos descriptivos pequeños */
     .small-text {
         font-size: 0.75rem;
-        color: #a1a1aa;
+        color: #557c65;
         margin-bottom: 2px;
         margin-top: 10px;
         font-weight: 600;
@@ -69,9 +70,9 @@ st.markdown("""
     
     /* Título superior de la app */
     .app-title {
-        font-size: 1rem;
+        font-size: 1.1rem;
         font-weight: 700;
-        color: #ffffff;
+        color: #122b1c;
         margin-bottom: 0px;
         padding-bottom: 0px;
     }
@@ -589,6 +590,8 @@ elif vista_activa == "Subcontratas":
 # ==========================================
 elif vista_activa == "Base de Precios":
     st.title("Base de Datos Global: Histórico de Precios")
+    st.markdown("Los registros introducidos aquí estarán disponibles para **todos los proyectos**.")
+    
     with st.form("form_precios_global"):
         c1, c2, c3 = st.columns(3)
         codigo = c1.text_input("Código (SKU)")
@@ -611,6 +614,8 @@ elif vista_activa == "Base de Precios":
 
 elif vista_activa == "Tarifas (Personal/Maquinaria)":
     st.title("Base de Datos Global: Costes Internos")
+    st.markdown("Estas tarifas se aplicarán al cálculo de costes de **todas las obras**.")
+    
     with st.form("form_tarifas_global"):
         c1, c2, c3 = st.columns(3)
         recurso = c1.text_input("Identificador")
