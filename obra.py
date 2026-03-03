@@ -7,11 +7,80 @@ import json
 import os
 import re
 
-# --- CONFIGURACIÓN ---
-st.set_page_config(page_title="ERP Construcción", layout="wide")
+# --- CONFIGURACIÓN DE PÁGINA ---
+st.set_page_config(page_title="ERP Construcción", layout="wide", initial_sidebar_state="expanded")
+
+# --- ESTÉTICA VAPI.AI (INYECCIÓN DE CSS) ---
+st.markdown("""
+    <style>
+    /* Fondo principal y color de texto (Dark Mode profundo) */
+    .stApp {
+        background-color: #09090b;
+        color: #f4f4f5;
+    }
+    
+    /* Barra lateral */
+    [data-testid="stSidebar"] {
+        background-color: #121214 !important;
+        border-right: 1px solid #27272a;
+    }
+    
+    /* Quitar el padding gigante superior de la barra lateral */
+    [data-testid="stSidebar"] > div:first-child {
+        padding-top: 1rem !important;
+    }
+    
+    /* Compactar botones de radio (el menú) */
+    .stRadio [role="radiogroup"] {
+        gap: 0.1rem !important; /* Espacio mínimo entre opciones */
+    }
+    .stRadio label {
+        padding: 2px 0px !important;
+        font-size: 0.85rem !important;
+    }
+    
+    /* Diseño de los selectores y campos de entrada */
+    .stSelectbox div[data-baseweb="select"], .stTextInput input, .stNumberInput input {
+        background-color: #18181b !important;
+        border: 1px solid #27272a !important;
+        border-radius: 4px !important;
+        color: #e4e4e7 !important;
+        font-size: 0.85rem !important;
+        min-height: 32px !important;
+    }
+    
+    /* Líneas separadoras más sutiles */
+    hr {
+        margin-top: 0.5rem !important;
+        margin-bottom: 0.5rem !important;
+        border-color: #27272a !important;
+    }
+    
+    /* Textos descriptivos pequeños */
+    .small-text {
+        font-size: 0.75rem;
+        color: #a1a1aa;
+        margin-bottom: 2px;
+        margin-top: 10px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+    
+    /* Título superior de la app */
+    .app-title {
+        font-size: 1rem;
+        font-weight: 700;
+        color: #ffffff;
+        margin-bottom: 0px;
+        padding-bottom: 0px;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# --- URL DEL ARCHIVO MAESTRO GLOBAL ---
+# 🔴 PEGA AQUÍ LA URL COMPLETA DE TU GOOGLE SHEETS "MAESTRO" 🔴
 URL_MAESTRO = "https://docs.google.com/spreadsheets/d/1Ua_8c_VgY_mKN_xN_TX_yXkwhoolkl8KOx3YRndcVdo/edit?gid=1271955705#gid=1271955705"
 
 # --- CONEXIÓN IA ---
@@ -47,7 +116,6 @@ def modulo_chat_ia(nombre_modulo, dicc_dataframes):
         st.session_state[chat_key] = []
         
     st.markdown(f"**Asistente de Datos: {nombre_modulo}**")
-    
     for msg in st.session_state[chat_key]:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
@@ -65,7 +133,6 @@ def modulo_chat_ia(nombre_modulo, dicc_dataframes):
                 contexto += f"--- {nombre_tabla} ---\n(Sin datos)\n\n"
                 
         contexto += """Instrucciones: Responde de forma profesional, clara y concisa. Basa tus cálculos estrictamente en los datos adjuntos.\n\nUsuario: """ + prompt
-        
         with st.chat_message("assistant"):
             with st.spinner("Procesando consulta..."):
                 try:
@@ -79,61 +146,57 @@ def modulo_chat_ia(nombre_modulo, dicc_dataframes):
 # --- MEMORIA TEMPORAL ---
 if 'ia_datos' not in st.session_state:
     st.session_state.ia_datos = {"Fecha": datetime.today().strftime("%Y-%m-%d"), "Tarea": "", "Descripción_Tarea": "", "Personal": "", "Maquinaria": ""}
-if 'mensajes_chat' not in st.session_state:
-    st.session_state.mensajes_chat = []
 
 # ==========================================
-# 0. NAVEGACIÓN Y SELECTOR GLOBAL
+# 0. NAVEGACIÓN Y SELECTOR GLOBAL (COMPACTO)
 # ==========================================
 if URL_MAESTRO == "PEGAR_AQUI_LA_URL_DEL_MAESTRO":
     st.error("Sistema bloqueado: URL del Maestro no configurada en el código fuente.")
     st.stop()
 
-st.sidebar.title("ERP Construcción")
-st.sidebar.markdown("---")
+# Estructura compacta de la barra lateral
+st.sidebar.markdown('<p class="app-title">ERP Construcción</p>', unsafe_allow_html=True)
 
 df_maestro = cargar_datos(0, URL_MAESTRO)
 if df_maestro.empty:
-    st.sidebar.error("Error de conexión con la Base de Datos Maestra.")
+    st.sidebar.error("Error BD Maestra.")
     st.stop()
 
 obras_activas = df_maestro[df_maestro['Estado'] == 'Activa']
 if obras_activas.empty:
-    st.sidebar.warning("No se encontraron proyectos activos.")
+    st.sidebar.warning("No hay proyectos.")
     st.stop()
 
-obra_actual = st.sidebar.selectbox("PROYECTO ACTIVO:", obras_activas['Nombre_Proyecto'].tolist())
+st.sidebar.markdown('<p class="small-text" style="margin-top: 5px;">PROYECTO ACTIVO</p>', unsafe_allow_html=True)
+obra_actual = st.sidebar.selectbox("", obras_activas['Nombre_Proyecto'].tolist(), label_visibility="collapsed")
 url_obra = obras_activas[obras_activas['Nombre_Proyecto'] == obra_actual]['Enlace_Google_Sheet'].values[0]
 
-st.sidebar.markdown("---")
-st.sidebar.markdown("**MÓDULOS DE PROYECTO**")
-menu_proyecto = st.sidebar.radio("Navegación Proyecto", [
+st.sidebar.markdown('<hr>', unsafe_allow_html=True)
+
+st.sidebar.markdown('<p class="small-text">MÓDULOS DEL PROYECTO</p>', unsafe_allow_html=True)
+menu_proyecto = st.sidebar.radio("", [
     "Gestión de Obras (Diario)",
     "Costes y Rendimientos",
     "Informe Ejecutivo (Finanzas)",
     "Importar Presupuesto",
     "Importar Certificación",
     "Subcontratas"
-], label_visibility="collapsed")
+], key="rad_proj", label_visibility="collapsed")
 
-st.sidebar.markdown("---")
-st.sidebar.markdown("**BASES DE DATOS GLOBALES**")
-menu_global = st.sidebar.radio("Navegación Global", [
+st.sidebar.markdown('<hr>', unsafe_allow_html=True)
+
+st.sidebar.markdown('<p class="small-text">BASES DE DATOS GLOBALES</p>', unsafe_allow_html=True)
+menu_global = st.sidebar.radio("", [
     "Base de Precios",
     "Tarifas (Personal/Maquinaria)"
-], label_visibility="collapsed")
+], key="rad_glob", label_visibility="collapsed")
 
-# Lógica simple para saber qué menú se ha clicado último (Streamlit workaround)
-# Priorizamos el menú en el que el usuario interactúe. Para simplificar el control de estado, 
-# usaremos un selectbox único estructurado si prefieres, pero mantendré radios independientes 
-# gestionando la vista activa.
+# Lógica de navegación mediante botones muy discretos para alternar contextos
+col1, col2 = st.sidebar.columns(2)
+if col1.button("Ver Proyecto"): st.session_state['vista_activa'] = menu_proyecto
+if col2.button("Ver Global"): st.session_state['vista_activa'] = menu_global
+
 vista_activa = st.session_state.get('vista_activa', menu_proyecto)
-
-def set_vista(vista):
-    st.session_state['vista_activa'] = vista
-
-if st.sidebar.button("Ir a Proyecto ->"): vista_activa = menu_proyecto
-if st.sidebar.button("Ir a Global ->"): vista_activa = menu_global
 
 # ==========================================
 # 1. GESTIÓN DE OBRAS Y DIARIO
@@ -176,7 +239,6 @@ if vista_activa == "Gestión de Obras (Diario)":
                 df_diario = pd.concat([df_diario, nuevo_parte], ignore_index=True)
                 guardar_datos("Diario", df_diario, url_obra)
                 
-                # Leemos tarifas del MAESTRO global
                 df_tarifas = cargar_datos("Tarifas_Personal_Maquinaria", URL_MAESTRO)
                 coste_p = calcular_coste_personal(personal, h_pers, df_tarifas)
                 if coste_p > 0:
@@ -187,12 +249,9 @@ if vista_activa == "Gestión de Obras (Diario)":
                     }])
                     df_costes = pd.concat([df_costes, nuevo_coste], ignore_index=True)
                     guardar_datos("Costes_Imputados", df_costes, url_obra)
-
                 st.success("Registro guardado correctamente.")
-
     with tab_chat:
-        # Chat IA para registro simplificado
-        pass # (Omitido por brevedad, idéntico a versiones anteriores si se desea restaurar el chat de voz)
+        st.info("El Asistente Virtual para creación de partes por IA está inactivo en esta versión.")
 
 # ==========================================
 # 2. COSTES Y RENDIMIENTOS
@@ -202,7 +261,7 @@ elif vista_activa == "Costes y Rendimientos":
     
     df_diario = cargar_datos("Diario", url_obra)
     df_imputados = cargar_datos("Costes_Imputados", url_obra)
-    df_tarifas = cargar_datos("Tarifas_Personal_Maquinaria", URL_MAESTRO) # Del maestro
+    df_tarifas = cargar_datos("Tarifas_Personal_Maquinaria", URL_MAESTRO)
     
     if df_diario.empty and df_imputados.empty:
         st.info("Sin registros de costes en este proyecto.")
@@ -251,14 +310,11 @@ elif vista_activa == "Informe Ejecutivo (Finanzas)":
             Presupuesto_Adjudicado=('Importe_Total_Adjudicado', 'sum')
         ).reset_index()
 
-        # Preparar Certificaciones (Buscamos la última columna de Importe_Mes_X registrada)
         meses_certificados = [col for col in df_cert_obra.columns if col.startswith("Importe_Mes_")]
         
         resumen_cert = pd.DataFrame(columns=['Cod_Control', 'Total_Certificado'])
         if not df_cert_obra.empty and meses_certificados:
             df_cert_obra['Cod_Control'] = df_cert_obra['Cod_Control'].astype(str).replace(r'\.0$', '', regex=True).str.strip()
-            # El total certificado a origen actual será la suma de todos los meses o simplemente la última columna a origen
-            # En este modelo acumulamos sumando las columnas de mes a mes para seguridad o tomamos la máxima
             df_cert_obra['Total_Certificado_Calculado'] = df_cert_obra[meses_certificados].apply(pd.to_numeric, errors='coerce').sum(axis=1)
             resumen_cert = df_cert_obra.groupby('Cod_Control').agg(Total_Certificado=('Total_Certificado_Calculado', 'sum')).reset_index()
 
@@ -289,9 +345,8 @@ elif vista_activa == "Informe Ejecutivo (Finanzas)":
         c3.metric("Certificado a Origen", f"{total_cert:,.2f} €", f"{avance_global:.2f}% Avance")
 
         st.markdown("---")
-        st.markdown("### Evolución de Certificaciones (Preparación Curva S)")
+        st.markdown("### Evolución de Certificaciones")
         if not df_cert_obra.empty and meses_certificados:
-            # Extraer totales por mes para la gráfica
             datos_grafica = {}
             acumulado = 0
             for mes_col in sorted(meses_certificados, key=lambda x: int(x.split('_')[2])):
@@ -310,38 +365,129 @@ elif vista_activa == "Informe Ejecutivo (Finanzas)":
 # ==========================================
 elif vista_activa == "Importar Presupuesto":
     st.title("Importación de Presupuesto Base")
-    # Lógica idéntica al Módulo 4 anterior (omitida la implementación completa de mapeo por brevedad, 
-    # asume la versión corregida previamente). Se mantiene limpio.
-    st.info("Módulo de importación de presupuesto activo.")
+    archivo_excel = st.file_uploader("Subir Archivo de Presupuesto (.xlsx)", type=['xlsx', 'xls'])
+    if archivo_excel:
+        xls = pd.ExcelFile(archivo_excel)
+        hojas_excel = xls.sheet_names
+        
+        with st.form("form_config_importacion"):
+            nombres_hojas_limpios = [h.lower().strip() for h in hojas_excel]
+            hojas_sugeridas = [h for h, h_limpio in zip(hojas_excel, nombres_hojas_limpios) if h_limpio in ["viviendas", "elementos comunes", "trasteros"]]
+            hojas_pto = st.multiselect("Pestañas con Presupuesto", hojas_excel, default=hojas_sugeridas)
+            
+            c3, c4 = st.columns(2)
+            gg_bi = c3.number_input("% GG y BI", value=15.00, step=1.0)
+            baja = c4.number_input("% Baja", value=1.20, step=0.1)
+            
+            letras_excel = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z"]
+            col1, col2, col3 = st.columns(3)
+            map_codigo = col1.selectbox("Col. Código", letras_excel, index=0) 
+            map_unidad = col2.selectbox("Col. Unidad", letras_excel, index=2) 
+            map_texto = col3.selectbox("Col. Texto", letras_excel, index=3) 
+            col4, col5, col6 = st.columns(3)
+            map_cant = col4.selectbox("Col. Cantidad", letras_excel, index=4) 
+            map_precio = col5.selectbox("Col. Precio Base", letras_excel, index=7) 
+            map_coste = col6.selectbox("Col. Coste Interno", ["No disponible"] + letras_excel, index=12) 
+            
+            map_cod_control = st.selectbox("Col. 'Cod_Control' (El numérico)", ["No disponible"] + letras_excel, index=0)
+            
+            if st.form_submit_button("Procesar Datos"):
+                try:
+                    def letra_idx(letra): return ord(letra) - 65
+                    filas_procesadas = []
+                    for hoja in hojas_pto:
+                        df_h = pd.read_excel(xls, sheet_name=hoja, header=None)
+                        capitulo_actual = "Sin Capítulo"
+                        
+                        idx_c = letra_idx(map_codigo)
+                        idx_u = letra_idx(map_unidad)
+                        idx_t = letra_idx(map_texto)
+                        idx_can = letra_idx(map_cant)
+                        idx_p = letra_idx(map_precio)
+                        idx_cost = letra_idx(map_coste) if map_coste != "No disponible" else -1
+                        idx_cc = letra_idx(map_cod_control) if map_cod_control != "No disponible" else -1
+                        
+                        for index, row in df_h.iterrows():
+                            if len(row) <= max(idx_c, idx_u, idx_t, idx_can, idx_p): continue
+                            
+                            codigo_val = str(row[idx_c]).strip() if pd.notna(row[idx_c]) else ""
+                            if codigo_val.endswith('.0'): codigo_val = codigo_val[:-2]
+
+                            texto_val = str(row[idx_t]).strip() if pd.notna(row[idx_t]) else ""
+                            precio_raw = str(row[idx_p]).replace(".", "").replace(",", ".") if isinstance(row[idx_p], str) else row[idx_p]
+                            precio_val = pd.to_numeric(precio_raw, errors='coerce')
+                            
+                            if codigo_val.lower() == "nan": codigo_val = ""
+                            if texto_val.lower() == "nan": texto_val = ""
+                            if "código" in codigo_val.lower() or "codigo" in codigo_val.lower(): continue
+                            
+                            cod_control_asignado = ""
+                            if idx_cc != -1 and len(row) > idx_cc:
+                                cc_raw = str(row[idx_cc]).strip() if pd.notna(row[idx_cc]) else ""
+                                if cc_raw.endswith('.0'): cc_raw = cc_raw[:-2]
+                                if cc_raw.lower() != "nan": cod_control_asignado = cc_raw
+                            
+                            if codigo_val and texto_val and pd.isna(precio_val):
+                                capitulo_actual = texto_val
+                            elif codigo_val and pd.notna(precio_val):
+                                cantidad = pd.to_numeric(row[idx_can], errors='coerce')
+                                if pd.isna(cantidad): cantidad = 0.0
+                                
+                                coste = 0.0
+                                if idx_cost != -1 and len(row) > idx_cost:
+                                    coste_val = pd.to_numeric(row[idx_cost], errors='coerce')
+                                    if pd.notna(coste_val): coste = coste_val
+                                
+                                pr_pres = float(precio_val)
+                                precio_licitacion = pr_pres * (1 + (gg_bi / 100.0))
+                                precio_adjudicado = precio_licitacion * (1 - (baja / 100.0))
+                                importe_total = cantidad * precio_adjudicado
+                                
+                                filas_procesadas.append({
+                                    "Cod_Control": cod_control_asignado, "Capítulo": capitulo_actual,
+                                    "Partida_Codigo": codigo_val, "Partida_Nombre": texto_val, 
+                                    "Partida_Descripcion": texto_val, "Unidad": str(row[idx_u]) if pd.notna(row[idx_u]) and str(row[idx_u]) != "nan" else "",
+                                    "Cantidad_Proyecto": cantidad, "PrPres": pr_pres,
+                                    "Precio_Licitacion": precio_licitacion, "Precio_Adjudicado": precio_adjudicado,
+                                    "Coste": coste, "Importe_Total_Adjudicado": importe_total
+                                })
+                            elif not codigo_val and pd.isna(precio_val) and texto_val:
+                                if filas_procesadas: filas_procesadas[-1]["Partida_Descripcion"] += "\n" + texto_val
+                                
+                    st.session_state.df_importacion = pd.DataFrame(filas_procesadas)
+                    st.success("Datos procesados correctamente.")
+                except Exception as e:
+                    st.error(f"Error procesando: {e}")
+
+        if 'df_importacion' in st.session_state and not st.session_state.df_importacion.empty:
+            st.dataframe(st.session_state.df_importacion.head(50), use_container_width=True)
+            if st.button("Confirmar y Subir a BD", type="primary"):
+                guardar_datos("Presupuesto_Base", st.session_state.df_importacion, url_obra)
+                st.success("Presupuesto guardado con éxito.")
+                del st.session_state['df_importacion']
 
 # ==========================================
 # 4.1 IMPORTAR CERTIFICACIÓN (ESTRICTA)
 # ==========================================
 elif vista_activa == "Importar Certificación":
     st.title("Importación de Certificación de Producción")
-    st.markdown("Macheo estricto contra Presupuesto Base. No se admiten desviaciones ni partidas no registradas.")
+    st.markdown("Macheo estricto contra Presupuesto Base.")
     
     archivo_cert = st.file_uploader("Subir Archivo de Certificación (.xlsx)", type=['xlsx', 'xls'])
-    
     if archivo_cert:
         xls_cert = pd.ExcelFile(archivo_cert)
-        hojas_cert = xls_cert.sheet_names
-        
         with st.form("form_certificacion"):
             c1, c2 = st.columns(2)
             mes_cert = c1.number_input("Mes de Certificación (Ej: 1, 2...)", min_value=1, step=1)
-            hoja_cert = c2.selectbox("Pestaña del documento", hojas_cert, index=0)
+            hoja_cert = c2.selectbox("Pestaña del documento", xls_cert.sheet_names, index=0)
             
             letras_excel = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z"]
             col1, col2, col3 = st.columns(3)
-            map_cod = col1.selectbox("Columna 'Código' (Ej: A)", letras_excel, index=0) 
-            map_nom = col2.selectbox("Columna 'Nombre' (Respaldo)", letras_excel, index=3) 
-            map_can = col3.selectbox("Columna 'Cantidad A Origen'", letras_excel, index=4) 
+            map_cod = col1.selectbox("Col. 'Código'", letras_excel, index=0) 
+            map_nom = col2.selectbox("Col. 'Nombre'", letras_excel, index=3) 
+            map_can = col3.selectbox("Col. 'Cantidad A Origen'", letras_excel, index=4) 
             
-            btn_procesar = st.form_submit_button("Validar Certificación")
-
-        if btn_procesar:
-            with st.spinner("Validando integridad de datos..."):
+            if st.form_submit_button("Validar Certificación"):
                 df_pto = cargar_datos("Presupuesto_Base", url_obra)
                 df_cert_db = cargar_datos("Certificaciones_Ingresos", url_obra)
 
@@ -386,7 +532,6 @@ elif vista_activa == "Importar Certificación":
 
                         if match_idx != -1:
                             precio = pd.to_numeric(df_base.at[match_idx, 'Precio_Adjudicado'], errors='coerce')
-                            # Como es a origen, calculamos la cantidad de ESTE mes restando los meses anteriores
                             cant_mes_actual = can_val
                             for m in range(1, mes_cert):
                                 col_ant = f"Cantidad_Mes_{m}"
@@ -400,17 +545,18 @@ elif vista_activa == "Importar Certificación":
                             huerfanas.append({"Código": cod_val, "Nombre": nom_val, "Cantidad": can_val})
 
                     if huerfanas:
-                        st.error(f"Validación Fallida: Se encontraron {len(huerfanas)} partidas no registradas en el Presupuesto Base.")
-                        st.markdown("Por favor, corrige el archivo original o añade estas partidas al Presupuesto Base antes de certificar.")
+                        st.error(f"Validación Fallida: {len(huerfanas)} partidas no registradas en el Presupuesto Base.")
+                        st.markdown("Corrige el archivo original o añade estas partidas al Presupuesto Base.")
                         st.dataframe(pd.DataFrame(huerfanas), use_container_width=True)
+                        if 'df_cert_importacion' in st.session_state: del st.session_state['df_cert_importacion']
                     else:
-                        st.success(f"Validación Exitosa. {encontradas} partidas mapeadas correctamente.")
+                        st.success(f"Validación Exitosa. {encontradas} partidas mapeadas.")
                         st.session_state.df_cert_importacion = df_base
 
         if 'df_cert_importacion' in st.session_state and not st.session_state.df_cert_importacion.empty:
             if st.button("Confirmar y Guardar Certificación", type="primary"):
                 guardar_datos("Certificaciones_Ingresos", st.session_state.df_cert_importacion, url_obra)
-                st.success("Certificación registrada en el sistema.")
+                st.success("Certificación registrada.")
                 del st.session_state['df_cert_importacion']
 
 # ==========================================
@@ -418,25 +564,40 @@ elif vista_activa == "Importar Certificación":
 # ==========================================
 elif vista_activa == "Subcontratas":
     st.title("Gestión de Subcontratas")
-    # Lógica estándar mantenida
+    with st.form("form_subcontratas"):
+        c1, c2 = st.columns(2)
+        gremio = c1.text_input("Gremio")
+        empresa = c2.text_input("Empresa")
+        c3, c4, c5 = st.columns(3)
+        f_inicio = c3.date_input("Fecha Inicio")
+        f_fin = c4.date_input("Fecha Fin")
+        estado = c5.selectbox("Estado", ["En curso", "Finalizado", "Paralizado"])
+        notas = st.text_area("Notas / Avance")
+        if st.form_submit_button("Registrar"):
+            df_sub = cargar_datos("Subcontratas", url_obra)
+            nueva_sub = pd.DataFrame([{
+                "Proyecto": obra_actual, "Gremio": gremio, "Empresa": empresa,
+                "Fecha_Inicio": f_inicio.strftime("%Y-%m-%d"), "Fecha_Fin_Prevista": f_fin.strftime("%Y-%m-%d"),
+                "Fecha_Fin_Real": "", "Estado": estado, "Avance_Notas": notas
+            }])
+            df_sub = pd.concat([df_sub, nueva_sub], ignore_index=True)
+            guardar_datos("Subcontratas", df_sub, url_obra)
+            st.success("Registrado.")
 
 # ==========================================
-# 6. BASES GLOBALES (PRECIOS Y TARIFAS)
+# 6. BASES GLOBALES
 # ==========================================
 elif vista_activa == "Base de Precios":
     st.title("Base de Datos Global: Histórico de Precios")
-    st.markdown("Los registros introducidos aquí estarán disponibles para **todos los proyectos**.")
-    
     with st.form("form_precios_global"):
         c1, c2, c3 = st.columns(3)
-        codigo = c1.text_input("Código Material (SKU)")
-        desc = c2.text_input("Descripción Material")
+        codigo = c1.text_input("Código (SKU)")
+        desc = c2.text_input("Descripción")
         prov = c3.text_input("Proveedor")
         c4, c5 = st.columns(2)
-        precio = c4.number_input("Precio Unitario (€)", min_value=0.0, format="%.2f")
-        dto = c5.number_input("Descuento (%)", min_value=0.0, format="%.2f")
-        
-        if st.form_submit_button("Guardar en Base Global"):
+        precio = c4.number_input("Precio (€)", min_value=0.0, format="%.2f")
+        dto = c5.number_input("Dto (%)", min_value=0.0, format="%.2f")
+        if st.form_submit_button("Guardar en Global"):
             df_hist = cargar_datos("Historico_Precios", URL_MAESTRO)
             nuevo_precio = pd.DataFrame([{
                 "Codigo_Material": codigo, "Material": desc, "Precio_Unitario": precio,
@@ -444,29 +605,22 @@ elif vista_activa == "Base de Precios":
             }])
             df_hist = pd.concat([df_hist, nuevo_precio], ignore_index=True)
             guardar_datos("Historico_Precios", df_hist, URL_MAESTRO)
-            st.success("Precio registrado en el Maestro Global.")
-            
-    st.markdown("---")
+            st.success("Registrado.")
     df_ver = cargar_datos("Historico_Precios", URL_MAESTRO)
     if not df_ver.empty: st.dataframe(df_ver, use_container_width=True)
 
 elif vista_activa == "Tarifas (Personal/Maquinaria)":
     st.title("Base de Datos Global: Costes Internos")
-    st.markdown("Estas tarifas se aplicarán al cálculo de costes de **todas las obras**.")
-    
     with st.form("form_tarifas_global"):
         c1, c2, c3 = st.columns(3)
-        recurso = c1.text_input("Identificador (Nombre/Máquina)")
+        recurso = c1.text_input("Identificador")
         tipo = c2.selectbox("Clasificación", ["Personal", "Maquinaria"])
-        coste = c3.number_input("Coste Unitario (€/h)", min_value=0.0, format="%.2f")
-        
-        if st.form_submit_button("Guardar Tarifa Global"):
+        coste = c3.number_input("Coste (€/h)", min_value=0.0, format="%.2f")
+        if st.form_submit_button("Guardar Tarifa"):
             df_tar = cargar_datos("Tarifas_Personal_Maquinaria", URL_MAESTRO) 
             nueva_tarifa = pd.DataFrame([{"Recurso": recurso, "Tipo": tipo, "Coste_Hora": coste}])
             df_tar = pd.concat([df_tar, nueva_tarifa], ignore_index=True)
             guardar_datos("Tarifas_Personal_Maquinaria", df_tar, URL_MAESTRO)
-            st.success("Tarifa registrada en el Maestro Global.")
-            
-    st.markdown("---")
+            st.success("Registrado.")
     df_ver_t = cargar_datos("Tarifas_Personal_Maquinaria", URL_MAESTRO)
     if not df_ver_t.empty: st.dataframe(df_ver_t, use_container_width=True)
