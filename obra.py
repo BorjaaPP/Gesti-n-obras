@@ -488,10 +488,13 @@ elif vista_activa == "Importar Certificación":
             hoja_cert = c2.selectbox("Pestaña del documento", xls_cert.sheet_names, index=0)
             
             letras_excel = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z"]
-            col1, col2, col3 = st.columns(3)
-            map_cod = col1.selectbox("Col. 'Código'", letras_excel, index=0) 
-            map_nom = col2.selectbox("Col. 'Nombre'", letras_excel, index=3) 
-            map_can = col3.selectbox("Col. 'Cantidad A Origen'", letras_excel, index=4) 
+            
+            # --- NUEVA DISTRIBUCIÓN A 4 COLUMNAS ---
+            col1, col2, col3, col4 = st.columns(4)
+            map_cod = col1.selectbox("Col. 'Código'", letras_excel, index=0) # Por defecto A
+            map_nat = col2.selectbox("Col. 'Naturaleza'", ["Omitir"] + letras_excel, index=2) # Por defecto B
+            map_nom = col3.selectbox("Col. 'Nombre'", letras_excel, index=3) # Por defecto D
+            map_can = col4.selectbox("Col. 'Cantidad'", letras_excel, index=4) # Por defecto E
             
             if st.form_submit_button("Validar Certificación"):
                 df_pto = cargar_datos("Presupuesto_Base", url_obra)
@@ -507,7 +510,6 @@ elif vista_activa == "Importar Certificación":
                         df_base = df_pto[['Cod_Control', 'Capítulo', 'Partida_Codigo', 'Partida_Nombre', 'Unidad', 'Precio_Adjudicado']].copy()
                     else:
                         df_base = df_cert_db.copy()
-                        # --- PARCHE DE SEGURIDAD: Si falta el precio en la BD de certificaciones, lo rescata del Presupuesto ---
                         if 'Precio_Adjudicado' not in df_base.columns:
                             dict_precios = dict(zip(df_pto['Partida_Codigo'], df_pto['Precio_Adjudicado']))
                             df_base['Precio_Adjudicado'] = df_base['Partida_Codigo'].map(dict_precios).fillna(0.0)
@@ -525,6 +527,14 @@ elif vista_activa == "Importar Certificación":
 
                     for index, row in df_excel.iterrows():
                         if len(row) <= max(letra_idx(map_cod), letra_idx(map_nom), letra_idx(map_can)): continue
+
+                        # --- EL FILTRO DE CAPÍTULOS ---
+                        if map_nat != "Omitir":
+                            idx_nat = letra_idx(map_nat)
+                            if len(row) > idx_nat and pd.notna(row[idx_nat]):
+                                nat_val = str(row[idx_nat]).strip().lower()
+                                if "capítulo" in nat_val or "capitulo" in nat_val:
+                                    continue # Salta a la siguiente fila ignorando esta
 
                         cod_val = str(row[letra_idx(map_cod)]).strip() if pd.notna(row[letra_idx(map_cod)]) else ""
                         if cod_val.endswith('.0'): cod_val = cod_val[:-2]
