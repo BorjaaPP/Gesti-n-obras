@@ -238,7 +238,6 @@ if vista_activa == "Gestión de Obras (Diario)":
             ud = c8.text_input("Unidad (ej: m2, ml, ud)")
             
             if st.form_submit_button("Guardar Registro"):
-                # 1. Guardar en el Diario
                 df_diario = cargar_datos("Diario", url_obra)
                 nuevo_parte = pd.DataFrame([{
                     "Fecha": fecha_input, "Proyecto": obra_actual, "Tipo_Entrada": "Manual",
@@ -249,7 +248,6 @@ if vista_activa == "Gestión de Obras (Diario)":
                 df_diario = pd.concat([df_diario, nuevo_parte], ignore_index=True)
                 guardar_datos("Diario", df_diario, url_obra)
                 
-                # 2. Calcular y guardar Costes
                 df_tarifas = cargar_datos("Tarifas_Personal_Maquinaria", URL_MAESTRO)
                 coste_p = calcular_coste_personal(personal, h_pers, df_tarifas)
                 if coste_p > 0:
@@ -265,19 +263,17 @@ if vista_activa == "Gestión de Obras (Diario)":
     # --- PESTAÑA 2: ASISTENTE DE VOZ Y LECTOR DE AUDIOS (MULTIPLE) ---
     with tab_chat:
         st.markdown("### Asistente de Obra Inteligente")
-        st.markdown("Graba un audio, escribe un texto, o **sube varios audios a la vez** (ej: varias notas de voz de WhatsApp). La IA los procesará uno por uno.")
+        st.markdown("Sube audios o graba notas de voz. La IA separará los trabajos y controlará las horas de los trabajadores.")
         
         c1, c2 = st.columns(2)
         with c1:
             audio_mic = st.audio_input("🎤 Grabar nota de voz desde el micro")
         with c2:
-            # Activado accept_multiple_files para cargar varios audios de golpe
             archivos_upload = st.file_uploader("📁 Subir archivos de audio (MP3, WAV, OGG...)", type=['mp3', 'wav', 'm4a', 'ogg', 'aac'], accept_multiple_files=True)
             
         texto_libre = st.text_area("📝 O descríbelo por texto:")
         
         if st.button("Procesar Partes con IA", type="primary"):
-            # Recopilamos todas las fuentes de entrada en una lista de tareas
             tareas_a_procesar = []
             
             if audio_mic:
@@ -289,10 +285,9 @@ if vista_activa == "Gestión de Obras (Diario)":
                 tareas_a_procesar.append({"tipo": "texto", "datos": texto_libre, "nombre": "Texto Manual"})
                 
             if not tareas_a_procesar:
-                st.warning("Por favor, proporciona al menos un audio (grabado o subido) o un texto para procesar.")
+                st.warning("Por favor, proporciona al menos un audio o un texto para procesar.")
             else:
-                with st.spinner(f"Procesando {len(tareas_a_procesar)} parte(s) de trabajo..."):
-                    # Cargamos las bases de datos una sola vez antes de empezar a procesar
+                with st.spinner(f"Procesando {len(tareas_a_procesar)} origen(es) de datos..."):
                     df_diario = cargar_datos("Diario", url_obra)
                     df_costes = cargar_datos("Costes_Imputados", url_obra)
                     df_tarifas = cargar_datos("Tarifas_Personal_Maquinaria", URL_MAESTRO)
@@ -303,17 +298,26 @@ if vista_activa == "Gestión de Obras (Diario)":
                     modelo = genai.GenerativeModel('gemini-2.5-flash')
                     fecha_hoy = datetime.today().strftime("%Y-%m-%d")
                     
+                    # PROMPT ACTUALIZADO CON TUS DIRECTRICES ESTRICTAS
                     prompt_ia = f"""
-                    Eres el encargado de obra. Extrae los datos del siguiente parte de trabajo y devuélvelos ÚNICAMENTE como un único objeto JSON puro (usa llaves, no un array, y sin comillas invertidas de markdown).
-                    Claves requeridas:
+                    Eres el encargado de obra. Extrae los datos del parte de trabajo y devuélvelos ÚNICAMENTE como un ARRAY (lista) de objetos JSON, sin comillas invertidas de markdown.
+                    
+                    REGLAS OBLIGATORIAS:
+                    1. SEPARACIÓN DE TAJOS: Si hay distintos trabajos o personas en tareas diferentes (Ej: José en tarea A y Fernando en tarea B), DEBES crear un objeto JSON independiente para cada uno. No los agrupes en una sola línea.
+                    2. CÁLCULO DE HORAS: 
+                       - Si no se especifican horas para una persona, asume por defecto 8.0 horas.
+                       - Si dice "mediodía" o "media jornada", son 4.0 horas.
+                       - Si da un número de horas exacto, usa ese número.
+                    
+                    Claves requeridas por cada objeto JSON de la lista:
                     - "Fecha": (YYYY-MM-DD, si no se dice una fecha, usa por defecto {fecha_hoy})
                     - "Tarea": Agrupador general (ej: Albañilería, Cimentación).
-                    - "Descripción_Tarea": Qué se ha hecho exactamente.
-                    - "Personal": Nombres de los trabajadores o cuadrilla.
-                    - "Horas_Personal": número float (suma total de las horas de las personas).
+                    - "Descripción_Tarea": Qué se ha hecho exactamente en esta línea.
+                    - "Personal": Nombre(s) del trabajador(es) asignado(s) A ESTE TRABAJO.
+                    - "Horas_Personal": número float (horas imputadas a ESTE trabajo).
                     - "Maquinaria": Máquinas usadas (vacío si no hay).
                     - "Horas_Maq": número float.
-                    - "Produccion": número float (cantidad de obra ejecutada).
+                    - "Produccion": número float (cantidad ejecutada).
                     - "Unidad": ud, m2, m3, ml, etc.
                     """
 
@@ -330,49 +334,68 @@ if vista_activa == "Gestión de Obras (Diario)":
                             respuesta = modelo.generate_content(contenido_enviar)
                             
                             texto_json = respuesta.text.strip().replace("```json", "").replace("```", "")
-                            datos_parte = json.loads(texto_json)
+                            lista_partes = json.loads(texto_json)
                             
-                            # Parche de seguridad por si devuelve una lista
-                            if isinstance(datos_parte, list):
-                                datos_parte = datos_parte[0] if len(datos_parte) > 0 else {}
+                            # Asegurarnos de que siempre sea una lista para iterar
+                            if isinstance(lista_partes, dict):
+                                lista_partes = [lista_partes]
                                 
-                            # Preparamos la fila del diario
-                            nuevos_partes_diario.append({
-                                "Fecha": datos_parte.get("Fecha", fecha_hoy),
-                                "Proyecto": obra_actual, 
-                                "Tipo_Entrada": "IA Asistente",
-                                "Contenido": f"Procesado de: {tarea['nombre']}",
-                                "Tarea": datos_parte.get("Tarea", ""),
-                                "Descripción_Tarea": datos_parte.get("Descripción_Tarea", ""),
-                                "Personal": datos_parte.get("Personal", ""),
-                                "Horas_Personal": float(datos_parte.get("Horas_Personal", 0.0)),
-                                "Maquinaria": datos_parte.get("Maquinaria", ""),
-                                "Horas_Maq": float(datos_parte.get("Horas_Maq", 0.0)),
-                                "Produccion": float(datos_parte.get("Produccion", 0.0)),
-                                "Unidad": datos_parte.get("Unidad", "")
-                            })
-                            
-                            # Preparamos la fila de costes si hay personal
-                            coste_p = calcular_coste_personal(datos_parte.get("Personal", ""), float(datos_parte.get("Horas_Personal", 0.0)), df_tarifas)
-                            if coste_p > 0:
-                                nuevos_partes_costes.append({
-                                    "Fecha": datos_parte.get("Fecha", fecha_hoy), 
+                            # Diccionario para sumar las horas y lanzar el "chivato"
+                            horas_trabajadores = {}
+
+                            for datos_parte in lista_partes:
+                                # Preparamos la fila del diario
+                                nuevos_partes_diario.append({
+                                    "Fecha": datos_parte.get("Fecha", fecha_hoy),
                                     "Proyecto": obra_actual, 
+                                    "Tipo_Entrada": "IA Asistente",
+                                    "Contenido": f"Procesado de: {tarea['nombre']}",
                                     "Tarea": datos_parte.get("Tarea", ""),
-                                    "Concepto": f"Mano de obra ({datos_parte.get('Descripción_Tarea', '')}): {datos_parte.get('Personal', '')}", 
-                                    "Coste_Total": coste_p
+                                    "Descripción_Tarea": datos_parte.get("Descripción_Tarea", ""),
+                                    "Personal": datos_parte.get("Personal", ""),
+                                    "Horas_Personal": float(datos_parte.get("Horas_Personal", 0.0)),
+                                    "Maquinaria": datos_parte.get("Maquinaria", ""),
+                                    "Horas_Maq": float(datos_parte.get("Horas_Maq", 0.0)),
+                                    "Produccion": float(datos_parte.get("Produccion", 0.0)),
+                                    "Unidad": datos_parte.get("Unidad", "")
                                 })
                                 
-                            st.success(f"✅ Procesado con éxito: {tarea['nombre']}")
+                                # Preparamos la fila de costes si hay personal
+                                horas_imputadas = float(datos_parte.get("Horas_Personal", 0.0))
+                                personal_str = datos_parte.get("Personal", "")
+                                
+                                coste_p = calcular_coste_personal(personal_str, horas_imputadas, df_tarifas)
+                                if coste_p > 0:
+                                    nuevos_partes_costes.append({
+                                        "Fecha": datos_parte.get("Fecha", fecha_hoy), 
+                                        "Proyecto": obra_actual, 
+                                        "Tarea": datos_parte.get("Tarea", ""),
+                                        "Concepto": f"Mano de obra ({datos_parte.get('Descripción_Tarea', '')}): {personal_str}", 
+                                        "Coste_Total": coste_p
+                                    })
+                                
+                                # Sumar horas para el chivato (separamos por "y" o comas)
+                                nombres_limpios = [n.strip() for n in re.split(r',| y | e ', personal_str) if n.strip()]
+                                for nombre in nombres_limpios:
+                                    horas_trabajadores[nombre] = horas_trabajadores.get(nombre, 0.0) + horas_imputadas
+
+                            st.success(f"✅ Procesado con éxito: {tarea['nombre']} ({len(lista_partes)} líneas generadas)")
                             
-                            # Mostrar el JSON extraído dentro de un desplegable para no saturar la pantalla
-                            with st.expander(f"Ver datos extraídos de {tarea['nombre']}"):
-                                st.json(datos_parte)
+                            # EL CHIVATO DE HORAS INCOMPLETAS
+                            for trabajador, horas_totales in horas_trabajadores.items():
+                                if 0.0 < horas_totales < 8.0:
+                                    horas_faltantes = 8.0 - horas_totales
+                                    st.warning(f"⚠️ **¡Ojo con {trabajador}!** Le has imputado {horas_totales}h. Te faltan por justificar **{horas_faltantes}h** de su jornada.")
+                                elif horas_totales > 8.0:
+                                    st.info(f"⏱️ Nota: A {trabajador} se le han imputado {horas_totales}h (tiene horas extra).")
+                            
+                            with st.expander(f"Ver desglose de líneas extraídas"):
+                                st.dataframe(pd.DataFrame(lista_partes), use_container_width=True)
                                 
                         except Exception as e:
                             st.error(f"❌ Error procesando {tarea['nombre']}: {e}")
                             
-                    # --- GUARDADO EN LOTE AL FINALIZAR EL BUCLE ---
+                    # --- GUARDADO EN LOTE AL FINALIZAR ---
                     if nuevos_partes_diario:
                         df_diario = pd.concat([df_diario, pd.DataFrame(nuevos_partes_diario)], ignore_index=True)
                         guardar_datos("Diario", df_diario, url_obra)
@@ -380,8 +403,6 @@ if vista_activa == "Gestión de Obras (Diario)":
                     if nuevos_partes_costes:
                         df_costes = pd.concat([df_costes, pd.DataFrame(nuevos_partes_costes)], ignore_index=True)
                         guardar_datos("Costes_Imputados", df_costes, url_obra)
-                        
-                    st.info(f"🎉 Se han registrado en la base de datos un total de {len(nuevos_partes_diario)} partes.")
 
 # ==========================================
 # 2. COSTES Y RENDIMIENTOS
