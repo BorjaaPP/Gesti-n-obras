@@ -475,11 +475,11 @@ elif vista_activa == "Importar Presupuesto":
                 del st.session_state['df_importacion']
 
 # ==========================================
-# 4.1 IMPORTAR CERTIFICACIÓN (Sincronización Maestra)
+# 4.1 IMPORTAR CERTIFICACIÓN (Memoria Secuencial)
 # ==========================================
 elif vista_activa == "Importar Certificación":
     st.title("Importación de Certificación de Producción")
-    st.markdown("Macheo contra Presupuesto Base. (Filtro inteligente y Fuzzy Matching activados).")
+    st.markdown("Macheo contra Presupuesto Base. (Filtro inteligente y mapeo 1 a 1 de capítulos idénticos).")
     
     archivo_cert = st.file_uploader("Subir Archivo de Certificación (.xlsx o .csv)", type=['xlsx', 'xls', 'csv'])
     if archivo_cert:
@@ -521,12 +521,8 @@ elif vista_activa == "Importar Certificación":
                         archivo_cert.seek(0)
                         df_excel = pd.read_csv(archivo_cert, header=None, sep=None, engine='python', encoding='latin1')
 
-                    # ========================================================
-                    # EL NUEVO NÚCLEO: SIEMPRE LEEMOS DEL PRESUPUESTO BASE
-                    # ========================================================
                     df_base = df_pto[['Cod_Control', 'Capítulo', 'Partida_Codigo', 'Partida_Nombre', 'Unidad', 'Precio_Adjudicado']].copy()
                     
-                    # Si hay certificaciones antiguas, cruzamos su histórico hacia este nuevo esqueleto
                     if not df_cert_db.empty and 'Partida_Codigo' in df_cert_db.columns:
                         cols_historicas = [c for c in df_cert_db.columns if c.startswith("Cantidad_Mes_") or c.startswith("Importe_Mes_")]
                         if cols_historicas:
@@ -535,7 +531,6 @@ elif vista_activa == "Importar Certificación":
                             for c in cols_historicas:
                                 df_base[c] = df_base[c].fillna(0.0)
 
-                    # Preparamos las columnas del mes actual
                     col_cant_mes = f"Cantidad_Mes_{mes_cert}"
                     col_imp_mes = f"Importe_Mes_{mes_cert}"
                     df_base[col_cant_mes] = 0.0
@@ -554,6 +549,9 @@ elif vista_activa == "Importar Certificación":
 
                     huerfanas = []
                     encontradas = 0
+                    
+                    # --- EL BLOQUEO DE MEMORIA ---
+                    lineas_usadas = set()
 
                     for index, row in df_excel.iterrows():
                         if len(row) <= max(letra_idx(map_cod), letra_idx(map_nom), letra_idx(map_can)): continue
@@ -579,23 +577,43 @@ elif vista_activa == "Importar Certificación":
                         nom_val_norm = limpiar_texto(nom_val)
                         match_idx = -1
 
-                        if cod_val and cod_val in pto_codigos:
-                            match_idx = pto_codigos.index(cod_val)
-                        elif nom_val_norm and nom_val_norm in pto_nombres:
-                            match_idx = pto_nombres.index(nom_val_norm)
-                        elif nom_val_norm and len(nom_val_norm) > 4:
-                            for i, p_nom in enumerate(pto_nombres):
-                                if p_nom and len(p_nom) > 4 and (nom_val_norm in p_nom or p_nom in nom_val_norm):
+                        # 1. Búsqueda exacta por Código (Ignorando las ya usadas)
+                        if cod_val:
+                            for i, c in enumerate(pto_codigos):
+                                if c == cod_val and i not in lineas_usadas:
                                     match_idx = i
                                     break
                                     
+                        # 2. Búsqueda exacta por Nombre Normalizado
                         if match_idx == -1 and nom_val_norm:
-                            nombres_validos = [n for n in pto_nombres if n]
-                            coincidencias = difflib.get_close_matches(nom_val_norm, nombres_validos, n=1, cutoff=0.85)
-                            if coincidencias:
-                                match_idx = pto_nombres.index(coincidencias[0])
+                            for i, n in enumerate(pto_nombres):
+                                if n == nom_val_norm and i not in lineas_usadas:
+                                    match_idx = i
+                                    break
+                                    
+                        # 3. Búsqueda PARCIAL
+                        if match_idx == -1 and nom_val_norm and len(nom_val_norm) > 4:
+                            for i, n in enumerate(pto_nombres):
+                                if n and len(n) > 4 and (nom_val_norm in n or n in nom_val_norm) and i not in lineas_usadas:
+                                    match_idx = i
+                                    break
+                                    
+                        # 4. Fuzzy Matching
+                        if match_idx == -1 and nom_val_norm:
+                            indices_disponibles = [i for i in range(len(pto_nombres)) if i not in lineas_usadas and pto_nombres[i]]
+                            nombres_disponibles = [pto_nombres[i] for i in indices_disponibles]
+                            if nombres_disponibles:
+                                coincidencias = difflib.get_close_matches(nom_val_norm, nombres_disponibles, n=1, cutoff=0.85)
+                                if coincidencias:
+                                    for i in indices_disponibles:
+                                        if pto_nombres[i] == coincidencias[0]:
+                                            match_idx = i
+                                            break
 
                         if match_idx != -1:
+                            # Bloqueamos la línea para no sobrescribirla con capítulos siguientes
+                            lineas_usadas.add(match_idx)
+                            
                             precio = pd.to_numeric(df_base.at[match_idx, 'Precio_Adjudicado'], errors='coerce')
                             cant_mes_actual = can_val
                             for m in range(1, mes_cert):
@@ -614,7 +632,7 @@ elif vista_activa == "Importar Certificación":
                         st.dataframe(pd.DataFrame(huerfanas), use_container_width=True)
                         if 'df_cert_importacion' in st.session_state: del st.session_state['df_cert_importacion']
                     else:
-                        st.success(f"Validación Exitosa. {encontradas} partidas mapeadas correctamente.")
+                        st.success(f"Validación Exitosa. {encontradas} partidas mapeadas secuencialmente.")
                         st.session_state.df_cert_importacion = df_base
 
         if 'df_cert_importacion' in st.session_state and not st.session_state.df_cert_importacion.empty:
