@@ -214,6 +214,7 @@ if vista_activa == "Gestión de Obras (Diario)":
     
     tab_parte, tab_chat = st.tabs(["📝 Registro Manual", "🎙️ Asistente de Voz (IA)"])
     
+    # --- PESTAÑA 1: REGISTRO MANUAL ---
     with tab_parte:
         st.markdown("### Registro de Jornada")
         with st.form("form_diario"):
@@ -237,6 +238,7 @@ if vista_activa == "Gestión de Obras (Diario)":
             ud = c8.text_input("Unidad (ej: m2, ml, ud)")
             
             if st.form_submit_button("Guardar Registro"):
+                # 1. Guardar en el Diario
                 df_diario = cargar_datos("Diario", url_obra)
                 nuevo_parte = pd.DataFrame([{
                     "Fecha": fecha_input, "Proyecto": obra_actual, "Tipo_Entrada": "Manual",
@@ -247,6 +249,7 @@ if vista_activa == "Gestión de Obras (Diario)":
                 df_diario = pd.concat([df_diario, nuevo_parte], ignore_index=True)
                 guardar_datos("Diario", df_diario, url_obra)
                 
+                # 2. Calcular y guardar Costes
                 df_tarifas = cargar_datos("Tarifas_Personal_Maquinaria", URL_MAESTRO)
                 coste_p = calcular_coste_personal(personal, h_pers, df_tarifas)
                 if coste_p > 0:
@@ -259,17 +262,25 @@ if vista_activa == "Gestión de Obras (Diario)":
                     guardar_datos("Costes_Imputados", df_costes, url_obra)
                 st.success("Registro guardado correctamente.")
 
-    # --- NUEVO ASISTENTE DE VOZ ---
+    # --- PESTAÑA 2: ASISTENTE DE VOZ Y LECTOR DE AUDIOS ---
     with tab_chat:
-        st.markdown("### Dictar Parte de Trabajo")
-        st.markdown("Graba un audio (o escríbelo) contando qué habéis hecho hoy, quién ha estado, las horas y la maquinaria.")
+        st.markdown("### Asistente de Obra Inteligente")
+        st.markdown("Graba un audio con el micrófono, sube un archivo de voz (ej: un audio de WhatsApp) o escríbelo directamente.")
         
-        audio_file = st.audio_input("Grabar nota de voz")
-        texto_libre = st.text_area("O descríbelo por texto:")
+        c1, c2 = st.columns(2)
+        with c1:
+            audio_mic = st.audio_input("🎤 Grabar nota de voz desde el micro")
+        with c2:
+            audio_upload = st.file_uploader("📁 O sube un archivo de audio (MP3, WAV, M4A...)", type=['mp3', 'wav', 'm4a', 'ogg', 'aac'])
+            
+        texto_libre = st.text_area("📝 O descríbelo por texto:")
         
         if st.button("Procesar Parte con IA", type="primary"):
+            # Si hay micro, usamos micro. Si no, usamos el archivo subido.
+            audio_file = audio_mic if audio_mic else audio_upload
+            
             if audio_file or texto_libre:
-                with st.spinner("La IA está escuchando y procesando tu parte de obra..."):
+                with st.spinner("La IA está escuchando y procesando el parte de obra..."):
                     try:
                         prompt_ia = f"""
                         Eres el encargado de obra. Extrae los datos del siguiente parte de trabajo y devuélvelos ÚNICAMENTE en formato JSON puro (sin comillas invertidas de markdown).
@@ -288,10 +299,12 @@ if vista_activa == "Gestión de Obras (Diario)":
                         modelo = genai.GenerativeModel('gemini-2.5-flash')
                         
                         contenido_enviar = [prompt_ia]
-                        # Si hay audio, se lo pasamos directamente a Gemini
+                        # Si hay un archivo de audio (grabado o subido), se lo pasamos a Gemini
                         if audio_file:
-                            contenido_enviar.append({"mime_type": "audio/wav", "data": audio_file.getvalue()})
-                        # Si hay texto, se lo pasamos también
+                            tipo_mime = audio_file.type if hasattr(audio_file, 'type') and audio_file.type else "audio/wav"
+                            contenido_enviar.append({"mime_type": tipo_mime, "data": audio_file.getvalue()})
+                            
+                        # Si hay texto, se lo añadimos
                         if texto_libre:
                             contenido_enviar.append(texto_libre)
                             
@@ -307,7 +320,7 @@ if vista_activa == "Gestión de Obras (Diario)":
                             "Fecha": datos_parte.get("Fecha", datetime.today().strftime("%Y-%m-%d")),
                             "Proyecto": obra_actual, 
                             "Tipo_Entrada": "IA Asistente",
-                            "Contenido": texto_libre if texto_libre else "Audio procesado por IA",
+                            "Contenido": texto_libre if texto_libre else "Audio importado/grabado procesado por IA",
                             "Tarea": datos_parte.get("Tarea", ""),
                             "Descripción_Tarea": datos_parte.get("Descripción_Tarea", ""),
                             "Personal": datos_parte.get("Personal", ""),
@@ -337,14 +350,14 @@ if vista_activa == "Gestión de Obras (Diario)":
                             
                         st.success("¡Parte de obra analizado y registrado correctamente en la base de datos!")
                         
-                        # Mostrarle al usuario lo que la IA ha entendido de su audio
-                        st.info("Datos extraídos de tu mensaje:")
+                        # Mostrarle al usuario lo que la IA ha entendido
+                        st.info("Datos extraídos por la IA:")
                         st.json(datos_parte)
                         
                     except Exception as e:
                         st.error(f"Error procesando el parte: {e}")
             else:
-                st.warning("Por favor, graba un audio o escribe un texto primero.")
+                st.warning("Por favor, graba un audio, sube un archivo de voz o escribe un texto primero.")
 
 # ==========================================
 # 2. COSTES Y RENDIMIENTOS
