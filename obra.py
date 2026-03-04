@@ -212,7 +212,7 @@ vista_activa = st.session_state.vista_activa
 if vista_activa == "Gestión de Obras (Diario)":
     st.title(f"Gestión de Obra: {obra_actual}")
     
-    tab_parte, tab_chat = st.tabs(["📝 Registro Manual", "🎙️ Asistente de Voz (IA)"])
+    tab_parte, tab_chat = st.tabs(["📝 Registro Manual", "🎙️ Asistente de Voz Múltiple (IA)"])
     
     # --- PESTAÑA 1: REGISTRO MANUAL ---
     with tab_parte:
@@ -262,102 +262,126 @@ if vista_activa == "Gestión de Obras (Diario)":
                     guardar_datos("Costes_Imputados", df_costes, url_obra)
                 st.success("Registro guardado correctamente.")
 
-    # --- PESTAÑA 2: ASISTENTE DE VOZ Y LECTOR DE AUDIOS ---
+    # --- PESTAÑA 2: ASISTENTE DE VOZ Y LECTOR DE AUDIOS (MULTIPLE) ---
     with tab_chat:
         st.markdown("### Asistente de Obra Inteligente")
-        st.markdown("Graba un audio con el micrófono, sube un archivo de voz (ej: un audio de WhatsApp) o escríbelo directamente.")
+        st.markdown("Graba un audio, escribe un texto, o **sube varios audios a la vez** (ej: varias notas de voz de WhatsApp). La IA los procesará uno por uno.")
         
         c1, c2 = st.columns(2)
         with c1:
             audio_mic = st.audio_input("🎤 Grabar nota de voz desde el micro")
         with c2:
-            audio_upload = st.file_uploader("📁 O sube un archivo de audio (MP3, WAV, M4A...)", type=['mp3', 'wav', 'm4a', 'ogg', 'aac'])
+            # Activado accept_multiple_files para cargar varios audios de golpe
+            archivos_upload = st.file_uploader("📁 Subir archivos de audio (MP3, WAV, OGG...)", type=['mp3', 'wav', 'm4a', 'ogg', 'aac'], accept_multiple_files=True)
             
         texto_libre = st.text_area("📝 O descríbelo por texto:")
         
-        if st.button("Procesar Parte con IA", type="primary"):
-            # Si hay micro, usamos micro. Si no, usamos el archivo subido.
-            audio_file = audio_mic if audio_mic else audio_upload
+        if st.button("Procesar Partes con IA", type="primary"):
+            # Recopilamos todas las fuentes de entrada en una lista de tareas
+            tareas_a_procesar = []
             
-            if audio_file or texto_libre:
-                with st.spinner("La IA está escuchando y procesando el parte de obra..."):
-                    try:
-                        prompt_ia = f"""
-                        Eres el encargado de obra. Extrae los datos del siguiente parte de trabajo y devuélvelos ÚNICAMENTE en formato JSON puro (sin comillas invertidas de markdown).
-                        Claves requeridas:
-                        - "Fecha": (YYYY-MM-DD, si no se dice una fecha, usa por defecto {datetime.today().strftime("%Y-%m-%d")})
-                        - "Tarea": Agrupador general (ej: Albañilería, Cimentación).
-                        - "Descripción_Tarea": Qué se ha hecho exactamente.
-                        - "Personal": Nombres de los trabajadores o cuadrilla.
-                        - "Horas_Personal": número float (suma total de las horas de las personas).
-                        - "Maquinaria": Máquinas usadas (vacío si no hay).
-                        - "Horas_Maq": número float.
-                        - "Produccion": número float (cantidad de obra ejecutada).
-                        - "Unidad": ud, m2, m3, ml, etc.
-                        """
-                        
-                        modelo = genai.GenerativeModel('gemini-2.5-flash')
-                        
-                        contenido_enviar = [prompt_ia]
-                        # Si hay un archivo de audio (grabado o subido), se lo pasamos a Gemini
-                        if audio_file:
-                            tipo_mime = audio_file.type if hasattr(audio_file, 'type') and audio_file.type else "audio/wav"
-                            contenido_enviar.append({"mime_type": tipo_mime, "data": audio_file.getvalue()})
+            if audio_mic:
+                tareas_a_procesar.append({"tipo": "audio", "datos": audio_mic, "nombre": "Grabación de Micrófono"})
+            if archivos_upload:
+                for archivo in archivos_upload:
+                    tareas_a_procesar.append({"tipo": "audio", "datos": archivo, "nombre": f"Archivo: {archivo.name}"})
+            if texto_libre.strip():
+                tareas_a_procesar.append({"tipo": "texto", "datos": texto_libre, "nombre": "Texto Manual"})
+                
+            if not tareas_a_procesar:
+                st.warning("Por favor, proporciona al menos un audio (grabado o subido) o un texto para procesar.")
+            else:
+                with st.spinner(f"Procesando {len(tareas_a_procesar)} parte(s) de trabajo..."):
+                    # Cargamos las bases de datos una sola vez antes de empezar a procesar
+                    df_diario = cargar_datos("Diario", url_obra)
+                    df_costes = cargar_datos("Costes_Imputados", url_obra)
+                    df_tarifas = cargar_datos("Tarifas_Personal_Maquinaria", URL_MAESTRO)
+                    
+                    nuevos_partes_diario = []
+                    nuevos_partes_costes = []
+                    
+                    modelo = genai.GenerativeModel('gemini-2.5-flash')
+                    fecha_hoy = datetime.today().strftime("%Y-%m-%d")
+                    
+                    prompt_ia = f"""
+                    Eres el encargado de obra. Extrae los datos del siguiente parte de trabajo y devuélvelos ÚNICAMENTE como un único objeto JSON puro (usa llaves, no un array, y sin comillas invertidas de markdown).
+                    Claves requeridas:
+                    - "Fecha": (YYYY-MM-DD, si no se dice una fecha, usa por defecto {fecha_hoy})
+                    - "Tarea": Agrupador general (ej: Albañilería, Cimentación).
+                    - "Descripción_Tarea": Qué se ha hecho exactamente.
+                    - "Personal": Nombres de los trabajadores o cuadrilla.
+                    - "Horas_Personal": número float (suma total de las horas de las personas).
+                    - "Maquinaria": Máquinas usadas (vacío si no hay).
+                    - "Horas_Maq": número float.
+                    - "Produccion": número float (cantidad de obra ejecutada).
+                    - "Unidad": ud, m2, m3, ml, etc.
+                    """
+
+                    for tarea in tareas_a_procesar:
+                        try:
+                            contenido_enviar = [prompt_ia]
                             
-                        # Si hay texto, se lo añadimos
-                        if texto_libre:
-                            contenido_enviar.append(texto_libre)
+                            if tarea["tipo"] == "audio":
+                                tipo_mime = tarea["datos"].type if hasattr(tarea["datos"], 'type') and tarea["datos"].type else "audio/wav"
+                                contenido_enviar.append({"mime_type": tipo_mime, "data": tarea["datos"].getvalue()})
+                            elif tarea["tipo"] == "texto":
+                                contenido_enviar.append(tarea["datos"])
+                                
+                            respuesta = modelo.generate_content(contenido_enviar)
                             
-                        respuesta = modelo.generate_content(contenido_enviar)
-                        
-                        # Limpiar posible formato markdown del JSON
-                        texto_json = respuesta.text.strip().replace("```json", "").replace("```", "")
-                        datos_parte = json.loads(texto_json)
-                        
-                        # --- 1. GUARDAR EN EL DIARIO ---
-                        df_diario = cargar_datos("Diario", url_obra)
-                        nuevo_parte = pd.DataFrame([{
-                            "Fecha": datos_parte.get("Fecha", datetime.today().strftime("%Y-%m-%d")),
-                            "Proyecto": obra_actual, 
-                            "Tipo_Entrada": "IA Asistente",
-                            "Contenido": texto_libre if texto_libre else "Audio importado/grabado procesado por IA",
-                            "Tarea": datos_parte.get("Tarea", ""),
-                            "Descripción_Tarea": datos_parte.get("Descripción_Tarea", ""),
-                            "Personal": datos_parte.get("Personal", ""),
-                            "Horas_Personal": float(datos_parte.get("Horas_Personal", 0.0)),
-                            "Maquinaria": datos_parte.get("Maquinaria", ""),
-                            "Horas_Maq": float(datos_parte.get("Horas_Maq", 0.0)),
-                            "Produccion": float(datos_parte.get("Produccion", 0.0)),
-                            "Unidad": datos_parte.get("Unidad", "")
-                        }])
-                        df_diario = pd.concat([df_diario, nuevo_parte], ignore_index=True)
+                            texto_json = respuesta.text.strip().replace("```json", "").replace("```", "")
+                            datos_parte = json.loads(texto_json)
+                            
+                            # Parche de seguridad por si devuelve una lista
+                            if isinstance(datos_parte, list):
+                                datos_parte = datos_parte[0] if len(datos_parte) > 0 else {}
+                                
+                            # Preparamos la fila del diario
+                            nuevos_partes_diario.append({
+                                "Fecha": datos_parte.get("Fecha", fecha_hoy),
+                                "Proyecto": obra_actual, 
+                                "Tipo_Entrada": "IA Asistente",
+                                "Contenido": f"Procesado de: {tarea['nombre']}",
+                                "Tarea": datos_parte.get("Tarea", ""),
+                                "Descripción_Tarea": datos_parte.get("Descripción_Tarea", ""),
+                                "Personal": datos_parte.get("Personal", ""),
+                                "Horas_Personal": float(datos_parte.get("Horas_Personal", 0.0)),
+                                "Maquinaria": datos_parte.get("Maquinaria", ""),
+                                "Horas_Maq": float(datos_parte.get("Horas_Maq", 0.0)),
+                                "Produccion": float(datos_parte.get("Produccion", 0.0)),
+                                "Unidad": datos_parte.get("Unidad", "")
+                            })
+                            
+                            # Preparamos la fila de costes si hay personal
+                            coste_p = calcular_coste_personal(datos_parte.get("Personal", ""), float(datos_parte.get("Horas_Personal", 0.0)), df_tarifas)
+                            if coste_p > 0:
+                                nuevos_partes_costes.append({
+                                    "Fecha": datos_parte.get("Fecha", fecha_hoy), 
+                                    "Proyecto": obra_actual, 
+                                    "Tarea": datos_parte.get("Tarea", ""),
+                                    "Concepto": f"Mano de obra ({datos_parte.get('Descripción_Tarea', '')}): {datos_parte.get('Personal', '')}", 
+                                    "Coste_Total": coste_p
+                                })
+                                
+                            st.success(f"✅ Procesado con éxito: {tarea['nombre']}")
+                            
+                            # Mostrar el JSON extraído dentro de un desplegable para no saturar la pantalla
+                            with st.expander(f"Ver datos extraídos de {tarea['nombre']}"):
+                                st.json(datos_parte)
+                                
+                        except Exception as e:
+                            st.error(f"❌ Error procesando {tarea['nombre']}: {e}")
+                            
+                    # --- GUARDADO EN LOTE AL FINALIZAR EL BUCLE ---
+                    if nuevos_partes_diario:
+                        df_diario = pd.concat([df_diario, pd.DataFrame(nuevos_partes_diario)], ignore_index=True)
                         guardar_datos("Diario", df_diario, url_obra)
                         
-                        # --- 2. CALCULAR Y GUARDAR COSTES AUTOMÁTICAMENTE ---
-                        df_tarifas = cargar_datos("Tarifas_Personal_Maquinaria", URL_MAESTRO)
-                        coste_p = calcular_coste_personal(datos_parte.get("Personal", ""), float(datos_parte.get("Horas_Personal", 0.0)), df_tarifas)
-                        if coste_p > 0:
-                            df_costes = cargar_datos("Costes_Imputados", url_obra)
-                            nuevo_coste = pd.DataFrame([{
-                                "Fecha": datos_parte.get("Fecha", datetime.today().strftime("%Y-%m-%d")), 
-                                "Proyecto": obra_actual, 
-                                "Tarea": datos_parte.get("Tarea", ""),
-                                "Concepto": f"Mano de obra ({datos_parte.get('Descripción_Tarea', '')}): {datos_parte.get('Personal', '')}", 
-                                "Coste_Total": coste_p
-                            }])
-                            df_costes = pd.concat([df_costes, nuevo_coste], ignore_index=True)
-                            guardar_datos("Costes_Imputados", df_costes, url_obra)
-                            
-                        st.success("¡Parte de obra analizado y registrado correctamente en la base de datos!")
+                    if nuevos_partes_costes:
+                        df_costes = pd.concat([df_costes, pd.DataFrame(nuevos_partes_costes)], ignore_index=True)
+                        guardar_datos("Costes_Imputados", df_costes, url_obra)
                         
-                        # Mostrarle al usuario lo que la IA ha entendido
-                        st.info("Datos extraídos por la IA:")
-                        st.json(datos_parte)
-                        
-                    except Exception as e:
-                        st.error(f"Error procesando el parte: {e}")
-            else:
-                st.warning("Por favor, graba un audio, sube un archivo de voz o escribe un texto primero.")
+                    st.info(f"🎉 Se han registrado en la base de datos un total de {len(nuevos_partes_diario)} partes.")
 
 # ==========================================
 # 2. COSTES Y RENDIMIENTOS
