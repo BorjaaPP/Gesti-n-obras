@@ -668,32 +668,132 @@ elif vista_activa == "Subcontratas":
             st.success("Registrado.")
 
 # ==========================================
-# 6. BASES GLOBALES
+# 6. BASES GLOBALES (PRECIOS Y TARIFAS)
 # ==========================================
 elif vista_activa == "Base de Precios":
-    st.title("Base de Datos Global: Histórico de Precios")
-    st.markdown("Los registros introducidos aquí estarán disponibles para **todos los proyectos**.")
+    st.title("Base de Precios Inteligente")
+    st.markdown("Carga facturas, actualiza tu base de datos automáticamente y consulta con la IA.")
     
-    with st.form("form_precios_global"):
-        c1, c2, c3 = st.columns(3)
-        codigo = c1.text_input("Código (SKU)")
-        desc = c2.text_input("Descripción")
-        prov = c3.text_input("Proveedor")
-        c4, c5 = st.columns(2)
-        precio = c4.number_input("Precio (€)", min_value=0.0, format="%.2f")
-        dto = c5.number_input("Dto (%)", min_value=0.0, format="%.2f")
-        if st.form_submit_button("Guardar en Global"):
-            df_hist = cargar_datos("Historico_Precios", URL_MAESTRO)
-            nuevo_precio = pd.DataFrame([{
-                "Codigo_Material": codigo, "Material": desc, "Precio_Unitario": precio,
-                "Descuento": dto, "Proveedor": prov, "Fecha_Actualizacion": datetime.today().strftime("%Y-%m-%d")
-            }])
-            df_hist = pd.concat([df_hist, nuevo_precio], ignore_index=True)
-            guardar_datos("Historico_Precios", df_hist, URL_MAESTRO)
-            st.success("Registrado.")
-    df_ver = cargar_datos("Historico_Precios", URL_MAESTRO)
-    if not df_ver.empty: st.dataframe(df_ver, use_container_width=True)
+    # Descargamos la base de datos actual para comparar y para el chat
+    df_hist = cargar_datos("Historico_Precios", URL_MAESTRO)
+    
+    tab_lector, tab_bd, tab_chat = st.tabs(["🧾 Lector de Facturas", "🗄️ Base de Datos Actual", "🤖 Asistente de Compras"])
+    
+    # --- PESTAÑA 1: LECTOR DE FACTURAS (IA) ---
+    with tab_lector:
+        archivo_factura = st.file_uploader("Sube una factura (PDF, JPG, PNG)", type=['pdf', 'jpg', 'jpeg', 'png'])
+        
+        if archivo_factura:
+            if st.button("Analizar Factura con IA", type="primary"):
+                with st.spinner("La IA está leyendo y procesando la factura..."):
+                    try:
+                        # Preparamos el archivo para Gemini
+                        mime_type = "application/pdf" if archivo_factura.name.endswith('pdf') else "image/jpeg"
+                        documento = {"mime_type": mime_type, "data": archivo_factura.getvalue()}
+                        
+                        prompt_ia = """
+                        Eres un experto analista de compras para una constructora. Analiza esta factura.
+                        Extrae TODAS las líneas de productos facturados.
+                        Devuelve ÚNICAMENTE un array en formato JSON puro (sin comillas invertidas de markdown, sin la palabra json).
+                        Cada objeto del array debe tener EXACTAMENTE estas claves:
+                        - "Proveedor": nombre del emisor.
+                        - "Codigo_Producto": SKU o referencia (vacío si no hay).
+                        - "Descripcion": nombre exacto del producto.
+                        - "Precio_Unitario": número float (usa punto para decimales).
+                        - "Descuento": número float (porcentaje, 0 si no hay).
+                        - "Num_Factura": número de la factura.
+                        - "Fecha": fecha (YYYY-MM-DD).
+                        - "Obra": nombre de la obra o dirección de envío (vacío si no hay).
+                        """
+                        
+                        modelo = genai.GenerativeModel('gemini-2.5-flash')
+                        respuesta = modelo.generate_content([documento, prompt_ia])
+                        
+                        # Limpiar posible formato markdown del JSON
+                        texto_json = respuesta.text.strip().replace("```json", "").replace("```", "")
+                        datos_factura = json.loads(texto_json)
+                        
+                        st.session_state.df_factura_procesada = pd.DataFrame(datos_factura)
+                        st.success("¡Factura procesada con éxito!")
+                        
+                    except Exception as e:
+                        st.error(f"Error al analizar la factura: {e}")
+                        st.markdown("Asegúrate de que la factura es legible y que tu API Key de Gemini está activa.")
 
+            # Si ya se ha procesado, mostramos el cruce de datos
+            if 'df_factura_procesada' in st.session_state and not st.session_state.df_factura_procesada.empty:
+                df_fac = st.session_state.df_factura_procesada
+                
+                st.markdown("### Resultado de la Extracción")
+                
+                # Lógica de Macheo contra el histórico
+                if not df_hist.empty:
+                    estados = []
+                    for _, row in df_fac.iterrows():
+                        desc_fac = str(row['Descripcion']).strip().lower()
+                        prov_fac = str(row['Proveedor']).strip().lower()
+                        precio_fac = float(row['Precio_Unitario'])
+                        dto_fac = float(row['Descuento'])
+                        
+                        # Buscar si existe en la BD (coincidencia de descripción y proveedor)
+                        match = df_hist[
+                            (df_hist['Descripcion'].astype(str).str.strip().str.lower() == desc_fac) &
+                            (df_hist['Proveedor'].astype(str).str.strip().str.lower() == prov_fac)
+                        ]
+                        
+                        if match.empty:
+                            estados.append("🟢 NUEVO")
+                        else:
+                            # Comprobamos si el precio o descuento han cambiado respecto al último registro
+                            precio_bd = float(match.iloc[-1]['Precio_Unitario'])
+                            dto_bd = float(match.iloc[-1]['Descuento'])
+                            
+                            if abs(precio_fac - precio_bd) > 0.01 or abs(dto_fac - dto_bd) > 0.01:
+                                estados.append(f"🟡 CAMBIO PRECIO (Antes: {precio_bd}€ / Dto: {dto_bd}%)")
+                            else:
+                                estados.append("⚪ SIN CAMBIOS")
+                                
+                    df_fac['Estado en BD'] = estados
+                else:
+                    df_fac['Estado en BD'] = "🟢 NUEVO (BD Vacía)"
+                
+                # Mostrar tabla con los resultados
+                st.dataframe(df_fac, use_container_width=True)
+                
+                if st.button("Confirmar y Guardar en Base de Datos Global", type="primary"):
+                    # Quitamos la columna de estado para guardarlo limpio
+                    df_guardar = df_fac.drop(columns=['Estado en BD'], errors='ignore')
+                    df_nuevo_hist = pd.concat([df_hist, df_guardar], ignore_index=True)
+                    guardar_datos("Historico_Precios", df_nuevo_hist, URL_MAESTRO)
+                    st.success("¡Artículos registrados correctamente en tu Base de Precios Global!")
+                    del st.session_state['df_factura_procesada']
+
+    # --- PESTAÑA 2: BASE DE DATOS ACTUAL ---
+    with tab_bd:
+        st.markdown("### Histórico de Precios Guardados")
+        if df_hist.empty:
+            st.info("La base de precios está vacía. Sube tu primera factura en la pestaña anterior.")
+        else:
+            # Filtro rápido
+            busqueda = st.text_input("Buscar producto o proveedor...")
+            if busqueda:
+                mask = df_hist.apply(lambda row: row.astype(str).str.contains(busqueda, case=False, na=False).any(), axis=1)
+                st.dataframe(df_hist[mask], use_container_width=True)
+            else:
+                st.dataframe(df_hist, use_container_width=True)
+
+    # --- PESTAÑA 3: CHAT IA DE COMPRAS ---
+    with tab_chat:
+        st.markdown("### Asistente de Compras")
+        st.markdown("Pregúntale a la IA sobre tus precios, variaciones, proveedores más baratos, etc.")
+        if df_hist.empty:
+            st.warning("Necesitas datos en el histórico para poder consultar al asistente.")
+        else:
+            modulo_chat_ia("Base de Precios", {"Historico_Precios": df_hist})
+
+# ==========================================
+# 6.2 TARIFAS (PERSONAL/MAQUINARIA)
+# ==========================================
 elif vista_activa == "Tarifas (Personal/Maquinaria)":
     st.title("Base de Datos Global: Costes Internos")
     st.markdown("Estas tarifas se aplicarán al cálculo de costes de **todas las obras**.")
@@ -709,5 +809,6 @@ elif vista_activa == "Tarifas (Personal/Maquinaria)":
             df_tar = pd.concat([df_tar, nueva_tarifa], ignore_index=True)
             guardar_datos("Tarifas_Personal_Maquinaria", df_tar, URL_MAESTRO)
             st.success("Registrado.")
+            
     df_ver_t = cargar_datos("Tarifas_Personal_Maquinaria", URL_MAESTRO)
     if not df_ver_t.empty: st.dataframe(df_ver_t, use_container_width=True)
